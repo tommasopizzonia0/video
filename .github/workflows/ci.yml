@@ -32,6 +32,31 @@ jobs:
         with:
           path: dist
 
+  # Renders every example headlessly, so the CLI and the engine are exercised in a real browser.
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: sudo apt-get install -y ffmpeg
+      - name: Render examples
+        run: |
+          mkdir -p renders
+          for f in examples/*.json; do
+            name=$(basename "$f" .json)
+            npm run render -- "$f" --contact 12 -o "renders/$name-contact.png"
+            npm run render -- "$f" --scale 0.25 --no-motion-blur -o "renders/$name-draft.mp4"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: renders
+          path: renders
+
   # Publishes the editor on GitHub Pages. Needs Settings → Pages → Source: "GitHub Actions".
   deploy:
     if: github.event_name == 'push'
