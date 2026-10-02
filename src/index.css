@@ -480,6 +480,111 @@ h3 {
   color: var(--muted);
 }
 
+/* Motion studio */
+.studio {
+  display: grid;
+  grid-template-columns: minmax(320px, 40%) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-areas:
+    'top top'
+    'code preview';
+  height: 100vh;
+}
+.mode-link {
+  margin-left: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.mode-link:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.code-panel {
+  grid-area: code;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--panel);
+}
+.code-panel .code {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  border: none;
+  border-radius: 0;
+  padding: 14px 16px;
+  background: var(--bg);
+  font-family: ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  tab-size: 2;
+  white-space: pre;
+}
+.code-panel .code:focus {
+  outline: none;
+}
+.issues {
+  max-height: 30%;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 8px 14px;
+  font-size: 12.5px;
+}
+.issues p {
+  margin: 4px 0;
+}
+.issues .ok {
+  color: #7ee0bb;
+}
+.issues .error {
+  position: static;
+  transform: none;
+  background: none;
+  border: none;
+  padding: 0;
+  display: block;
+  white-space: normal;
+  color: #ff8a8d;
+}
+.issues .warning {
+  color: #f0c46a;
+}
+.issues code {
+  color: var(--muted);
+  margin-right: 6px;
+}
+.studio .preview .error {
+  position: static;
+  transform: none;
+  white-space: normal;
+}
+.scrub {
+  flex: 1;
+  min-width: 160px;
+  accent-color: var(--accent);
+}
+.scene-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: center;
+}
+.scene-chips button {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.scene-chips span {
+  color: var(--muted);
+  margin-left: 4px;
+}
+
 /* Small screens: stack the panels */
 @media (max-width: 900px) {
   .app {
@@ -492,5 +597,17 @@ h3 {
   .inspector {
     border: none;
     border-top: 1px solid var(--border);
+  }
+  .studio {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 55vh 60vh;
+    grid-template-areas: 'top' 'preview' 'code';
+    height: auto;
+  }
+  .topbar {
+    flex-wrap: wrap;
+  }
+  .topbar-actions {
+    flex-wrap: wrap;
   }
 }

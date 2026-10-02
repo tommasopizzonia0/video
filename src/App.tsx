@@ -105,6 +105,9 @@ export default function App() {
       <header className="topbar">
         <div className="brand">
           <span className="logo">▶</span> Video Editor
+          <a className="mode-link" href="#motion" title="Video di motion design da un file JSON">
+            ✦ Motion
+          </a>
         </div>
         <div className="topbar-actions">
           <label className="field-inline">
