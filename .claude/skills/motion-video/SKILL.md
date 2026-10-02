@@ -24,3 +24,16 @@ with `maskUp` by word, secondary text later with `fadeUp`; ease out (`smooth`, `
 arrivals; slow background drift so no frame is static; `grain` ~0.04 and `vignette` ~0.3 for finish;
 `motionBlur` for fast moves. When the engine can't express something, extend the engine
 (`src/engine/`, with a test in `src/engine/engine.test.ts`) rather than faking it.
+
+## Working live with the user
+
+`npm run build:artifact` builds the Motion studio as one HTML file (`dist-artifact/index.html`) to publish
+as a claude.ai Artifact with capabilities `db`, `user`, `assets`, `comments`, `downloads`. On that page:
+
+- **You → the user**: write the composition to the shared doc `live/current` as
+  `{ "json": "<composition text>", "note": "what you are doing", "time": <seconds to show> }`
+  (ArtifactData `set`/`update`). Every open page reloads it instantly.
+- **The user → you**: files they drop are uploaded and listed in the `files` collection
+  (`{ name, id, type }`); fetch one with the Artifact tool's `read` and `path: <id>`, and reference it in the
+  JSON by its `name`. Messages from the "Invia a Claude" box arrive as comments sent to Claude,
+  prefixed with the second of the video they were looking at; answer and resolve them with ArtifactComments.
