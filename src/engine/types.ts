@@ -297,17 +297,77 @@ export interface GroupLayer extends LayerBase {
   stroke?: Stroke
 }
 
-export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer
+export interface CaptionWord {
+  text: string
+  /** Seconds from the layer start. */
+  start: number
+  end: number
+}
 
-export type TransitionType = 'cut' | 'fade' | 'dip' | 'slide' | 'push' | 'zoom' | 'blur' | 'wipe' | 'iris'
+export interface CaptionsLayer extends LayerBase {
+  type: 'captions'
+  /** Word timings, seconds from the layer start. Or use `asset`. */
+  words?: CaptionWord[]
+  /** A "captions" asset: Whisper JSON with word timings (best), a word list, or an SRT/VTT file. */
+  asset?: string
+  /** "highlight" (default): the page shows whole and the spoken word lights up. "reveal": words pop in as spoken. */
+  mode?: 'highlight' | 'reveal'
+  /** Words per page (default 3) and characters per page (default 22). */
+  maxWords?: number
+  maxChars?: number
+  font?: string
+  /** px; default 72 on a 1080-wide frame, scaled with the width. */
+  size?: number
+  weight?: number
+  italic?: boolean
+  color?: string
+  /** Color of the word being spoken (default "#FFE45E"). Same as `color` to turn the highlight off. */
+  highlight?: string
+  uppercase?: boolean
+  /** Outline drawn behind the letters (default black, 10 px of which half shows). `false` for none. */
+  stroke?: Stroke | false
+  /** A pill behind each page. */
+  background?: TextBackground
+  /** Wrap width in px (default 80% of the frame). */
+  width?: number
+  letterSpacing?: number
+  lineHeight?: number
+}
+
+export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer | CaptionsLayer
+
+export type TransitionType =
+  | 'cut'
+  | 'fade'
+  | 'dip'
+  | 'slide'
+  | 'push'
+  | 'zoom'
+  | 'blur'
+  | 'wipe'
+  | 'iris'
+  | 'curve'
+  | 'zoomThrough'
+  | 'zoomBack'
+  | 'flash'
+  | 'whip'
 
 export interface Transition {
   type: TransitionType
   duration?: number
+  /**
+   * Shapes the transition's progress. "curve", "zoomThrough", "zoomBack", "flash" and "whip" carry
+   * their own velocity-matched curves and default to "linear"; the others default to "inOutCubic".
+   */
   ease?: Ease
+  /** Direction the content travels: "left" (default) moves the old scene out to the left. */
   direction?: 'left' | 'right' | 'up' | 'down'
-  /** Color for "dip". */
+  /** Color for "dip" and "flash". */
   color?: string
+  /** Peak blur in px at the cut ("curve", "zoomThrough", "zoomBack", "whip"). */
+  blur?: number
+  /** Travel in px for "curve" (default 12% of the frame along the direction). */
+  distance?: number
 }
 
 export interface Scene {
@@ -321,7 +381,8 @@ export interface Scene {
 }
 
 export interface Asset {
-  type: 'image' | 'video' | 'audio'
+  /** "captions": word timings for a captions layer (Whisper JSON, a word list, SRT or VTT). */
+  type: 'image' | 'video' | 'audio' | 'captions'
   /** Path relative to the composition file, or a URL. */
   src: string
 }
@@ -333,16 +394,43 @@ export interface FontSource {
   style?: 'normal' | 'italic'
 }
 
+export type SfxName = 'whoosh' | 'impact' | 'riser' | 'click' | 'pop' | 'tick' | 'sparkle'
+
 export interface AudioClip {
-  asset: string
-  /** Comp time in seconds. */
+  /** An audio or video asset. Use either `asset` or `sfx`. */
+  asset?: string
+  /** A built-in synthesized sound effect. `start` is when it hits (the peak). */
+  sfx?: SfxName
+  /** "voice" clips duck the "music" ones (see `mix.duck`). Default: "sfx" for `sfx`, else "music". */
+  role?: 'music' | 'voice' | 'sfx'
+  /** Makes `start` relative to this scene (its `id`, or its index in `scenes`). */
+  scene?: string | number
+  /** Seconds: comp time, or time in `scene` when set. */
   start?: number
   /** Seconds into the source. */
   sourceStart?: number
   duration?: number
-  volume?: number
+  /** Linear gain (1 = unchanged). Keyframe times are seconds from the clip start. */
+  volume?: Anim<number>
   fadeIn?: number
   fadeOut?: number
+}
+
+export interface DuckSettings {
+  /** How far music dips under the voice, in dB (default -12). */
+  amount?: number
+  /** Seconds to dip and to recover (defaults 0.12 and 0.45). */
+  attack?: number
+  release?: number
+  /** Voice level that counts as speech, dBFS (default -45). */
+  threshold?: number
+}
+
+export interface MixSettings {
+  /** Integrated loudness target of the export in LUFS (default -14, the social standard); false = untouched. */
+  loudness?: number | false
+  /** Music ducking under "voice" clips; on by default when there is a voice. false = off. */
+  duck?: DuckSettings | false
 }
 
 export interface Effects {
@@ -364,6 +452,8 @@ export interface Composition {
   fonts?: FontSource[]
   assets?: Record<string, Asset>
   audio?: AudioClip[]
+  /** Loudness and ducking for the final mix. */
+  mix?: MixSettings
   scenes?: Scene[]
   /** Drawn above the scenes, in comp time. */
   layers?: Layer[]

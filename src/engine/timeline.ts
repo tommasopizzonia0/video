@@ -7,9 +7,14 @@ import type { Composition, Layer, Scene, Transition } from './types'
 export const DEFAULT_FPS = 30
 export const DEFAULT_TRANSITION = 0.6
 
+/** Transitions that carry their own velocity-matched curves: their progress runs linearly by default. */
+export const SHAPED_TRANSITIONS = new Set(['curve', 'zoomThrough', 'zoomBack', 'flash', 'whip'])
+
+const DEFAULT_DURATIONS: Record<string, number> = { curve: 0.6, zoomThrough: 0.7, zoomBack: 0.7, flash: 0.34, whip: 0.36 }
+
 export function transitionDuration(tr: Transition | undefined): number {
   if (!tr || tr.type === 'cut') return 0
-  return Math.max(0, tr.duration ?? DEFAULT_TRANSITION)
+  return Math.max(0, tr.duration ?? DEFAULT_DURATIONS[tr.type] ?? DEFAULT_TRANSITION)
 }
 
 /** Comp start time of every scene. A transition makes a scene start before the previous one ends. */
@@ -59,7 +64,7 @@ export function activeScenes(scenes: Scene[], t: number): ActiveScene[] {
     if (local < 0 || (local >= scene.duration && !last)) return
     const tr = scene.transition
     const d = index > 0 ? Math.min(transitionDuration(tr), scenes[index - 1].duration, scene.duration) : 0
-    const enter = d > 0 && local < d ? progress(local, 0, d, tr?.ease, 'inOutCubic') : null
+    const enter = d > 0 && local < d ? progress(local, 0, d, tr?.ease, tr && SHAPED_TRANSITIONS.has(tr.type) ? 'linear' : 'inOutCubic') : null
     out.push({ index, scene, local: Math.min(local, scene.duration), enter })
   })
   // An outgoing scene is only needed while the next one is still transitioning in.

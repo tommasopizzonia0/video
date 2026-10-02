@@ -2,8 +2,11 @@
 // that the CLI drives through Playwright: load a composition, draw frames, export.
 
 import { audioMix } from './engine/audio'
-import { exportVideo } from './engine/export'
+import { captionPages, pageText, toSrt } from './engine/captions'
+import { exportVideo, renderAudio } from './engine/export'
+import { encodeWav, integratedLoudness } from './engine/loudness'
 import { Renderer, videoRequests } from './engine/render'
+import { placedLayers } from './engine/timeline'
 import { BrowserResources } from './engine/resources'
 import type { Composition } from './engine/types'
 import { validate } from './engine/validate'
@@ -45,8 +48,21 @@ const api = {
       height: renderer.height,
       fps: renderer.fps,
       duration: renderer.duration,
-      mix: audioMix(comp),
+      audioSources: [...new Set(audioMix(comp).flatMap((c) => (c.asset && comp.assets?.[c.asset] ? [comp.assets[c.asset].src] : [])))],
     }
+  },
+
+  /**
+   * The mixed sound of [from, from + duration] as a 32-bit float WAV (base64), not normalized, with its
+   * loudness. `overrides` maps asset srcs to decodable copies. Null when the comp is silent.
+   */
+  async mixdown(from: number, duration: number, overrides: Record<string, string> = {}) {
+    const s = session!
+    const buffer = await renderAudio(s.comp, s.res, duration, { from, audioSrc: (src) => overrides[src], normalize: false })
+    if (!buffer) return null
+    const channels = [buffer.getChannelData(0), buffer.getChannelData(1)]
+    const wav = encodeWav(channels, buffer.sampleRate)
+    return { data: await toBase64(new Blob([wav as Uint8Array<ArrayBuffer>])), loudness: integratedLoudness(channels, buffer.sampleRate) }
   },
 
   /** Video assets this browser cannot decode (the CLI converts them first). */
@@ -66,6 +82,22 @@ const api = {
       }
     }
     return out
+  },
+
+  /** Every caption page in comp time, as SRT text (empty when the comp has no captions). */
+  srt() {
+    const s = session!
+    const cues: { start: number; end: number; text: string }[] = []
+    for (const { layer, start, duration } of placedLayers(s.comp)) {
+      if (layer.type !== 'captions') continue
+      const words = layer.words ?? (layer.asset ? s.res.captions(layer.asset) : null) ?? []
+      for (const page of captionPages(words, layer.maxWords ?? 3, layer.maxChars ?? 22)) {
+        if (page.start >= duration) continue
+        cues.push({ start: start + page.start, end: start + Math.min(page.end, duration), text: pageText(layer, page) })
+      }
+    }
+    cues.sort((a, b) => a.start - b.start)
+    return cues.length ? toSrt(cues) : ''
   },
 
   /** Draws comp time `t` and returns the frame as base64 JPEG or PNG. */

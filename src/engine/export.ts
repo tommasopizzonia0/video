@@ -14,6 +14,7 @@ import {
   canEncodeVideo,
 } from 'mediabunny'
 import { audioMix, scheduleMix } from './audio'
+import { DEFAULT_LOUDNESS, normalizationGain } from './loudness'
 import { Renderer, videoRequests } from './render'
 import type { BrowserResources } from './resources'
 import type { Composition } from './types'
@@ -26,16 +27,32 @@ export interface ExportOptions {
 
 let aacRegistered = false
 
-/** Renders the whole comp to a sample-accurate audio buffer. */
-export async function renderAudio(comp: Composition, res: BrowserResources, duration: number): Promise<AudioBuffer | null> {
+export interface RenderAudioOptions {
+  /** Comp time to start from (default 0). */
+  from?: number
+  /** Overrides the asset file used for sound (see BrowserResources.audioBuffers). */
+  audioSrc?: (src: string) => string | undefined
+  /** Normalize to the composition's loudness target (default true). */
+  normalize?: boolean
+}
+
+/** Renders the comp's sound to a sample-accurate buffer, normalized to `mix.loudness` (default -14 LUFS). */
+export async function renderAudio(comp: Composition, res: BrowserResources, duration: number, options: RenderAudioOptions = {}): Promise<AudioBuffer | null> {
   const mix = audioMix(comp)
   if (!mix.length) return null
   const rate = 48000
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(duration * rate)), rate)
-  const buffers = await res.audioBuffers(ctx)
-  if (!buffers.size) return null
-  scheduleMix(ctx, mix, buffers, 0)
-  return ctx.startRendering()
+  const buffers = await res.audioBuffers(ctx, options.audioSrc)
+  if (!buffers.size && !mix.some((c) => c.sfx)) return null
+  scheduleMix(ctx, mix, buffers, options.from ?? 0)
+  const out = await ctx.startRendering()
+  const target = comp.mix?.loudness ?? DEFAULT_LOUDNESS
+  if (options.normalize !== false && target !== false) {
+    const channels = [out.getChannelData(0), out.getChannelData(1)]
+    const gain = normalizationGain(channels, rate, target)
+    for (const c of channels) for (let i = 0; i < c.length; i++) c[i] *= gain
+  }
+  return out
 }
 
 export async function exportVideo(comp: Composition, res: BrowserResources, options: ExportOptions = {}): Promise<{ blob: Blob; extension: string }> {

@@ -30,6 +30,7 @@ function usage(msg) {
   --png                 lossless frames (slower; default is high-quality JPEG)
   --crf <n>             x264 quality, lower is better (default 16)
   --no-motion-blur      skip motion blur even if the composition asks for it
+  --srt                 only write the captions as an .srt file next to the JSON
   --workers <n>         browser pages rendering in parallel (default: CPU cores - 1)`)
   process.exit(msg ? 1 : 0)
 }
@@ -53,6 +54,7 @@ function parseArgs(argv) {
     else if (a === '--crf') opts.crf = Number(next())
     else if (a === '--png') opts.png = true
     else if (a === '--no-motion-blur') opts.motionBlur = false
+    else if (a === '--srt') opts.srt = true
     else if (a === '--workers') opts.workers = Number(next())
     else if (a.startsWith('-')) usage(`unknown option ${a}`)
     else rest.push(a)
@@ -152,43 +154,31 @@ function hasAudio(file) {
   return r.status === 0 && r.stdout.trim().length > 0
 }
 
-/** ffmpeg arguments that mix the audio clips; inputs start at index 1 (0 is the frames). */
-function audioArgs(mix, assets, projectDir, from, duration) {
-  const inputs = []
-  const filters = []
-  const labels = []
-  const files = new Map()
-  mix.forEach((clip, i) => {
-    const asset = assets[clip.asset]
-    if (!asset || /^https?:/.test(asset.src)) return
-    const file = resolve(projectDir, asset.src)
-    if (!existsSync(file) || !hasAudio(file)) return
-    if (!files.has(file)) {
-      files.set(file, inputs.length / 2 + 1)
-      inputs.push('-i', file)
-    }
-    const idx = files.get(file)
-    // Shift into the rendered range.
-    const start = clip.start - from
-    const skip = Math.max(0, -start)
-    const dur = clip.duration - skip
-    if (dur <= 0 || start >= duration) return
-    const chain = [
-      `atrim=start=${clip.sourceStart + skip * clip.playbackRate}:duration=${dur * clip.playbackRate}`,
-      'asetpts=PTS-STARTPTS',
-    ]
-    if (clip.playbackRate !== 1) chain.push(`atempo=${Math.min(2, Math.max(0.5, clip.playbackRate))}`)
-    chain.push(`volume=${clip.volume}`)
-    if (clip.fadeIn > 0 && skip < clip.fadeIn) chain.push(`afade=t=in:st=0:d=${clip.fadeIn - skip}`)
-    if (clip.fadeOut > 0) chain.push(`afade=t=out:st=${Math.max(0, dur - clip.fadeOut)}:d=${clip.fadeOut}`)
-    const delay = Math.round(Math.max(0, start) * 1000)
-    chain.push(`adelay=${delay}:all=1`)
-    filters.push(`[${idx}:a]${chain.join(',')}[a${i}]`)
-    labels.push(`[a${i}]`)
-  })
-  if (!labels.length) return null
-  filters.push(`${labels.join('')}amix=inputs=${labels.length}:normalize=0:duration=longest,apad[aout]`)
-  return { inputs, filter: filters.join(';') }
+/** Converts a file's sound to WAV, which every Chromium build decodes. Cached by content. */
+function toWav(file, cacheDir) {
+  const hash = createHash('sha1').update(file).update(String(statSync(file).mtimeMs)).digest('hex').slice(0, 12)
+  const out = join(cacheDir, `${basename(file, extname(file))}-${hash}.wav`)
+  if (existsSync(out)) return out
+  const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', file, '-vn', '-ac', '2', '-ar', '48000', '-c:a', 'pcm_s16le', out], { stdio: 'inherit' })
+  if (r.status !== 0) throw new Error(`ffmpeg could not read the sound of ${file}`)
+  return out
+}
+
+/**
+ * Two-pass EBU R128 normalization to `target` LUFS with a -1 dBTP true-peak ceiling.
+ * Returns the normalized WAV, or the input when it is silent.
+ */
+function loudnorm(input, output, target) {
+  const base = `loudnorm=I=${target}:TP=-1:LRA=11`
+  const probe = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', input, '-af', `${base}:print_format=json`, '-f', 'null', '-'], { encoding: 'utf8' })
+  const json = /\{[^{}]*"input_i"[^{}]*\}/.exec(probe.stderr ?? '')
+  if (probe.status !== 0 || !json) throw new Error('ffmpeg could not measure the loudness of the mix')
+  const m = JSON.parse(json[0])
+  if (!Number.isFinite(Number(m.input_i))) return { file: input, before: -Infinity }
+  const filter = `${base}:measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}:linear=true,aresample=48000`
+  const r = spawnSync('ffmpeg', ['-y', '-loglevel', 'error', '-i', input, '-af', filter, '-c:a', 'pcm_f32le', output], { stdio: 'inherit' })
+  if (r.status !== 0) throw new Error('ffmpeg could not normalize the mix')
+  return { file: output, before: Number(m.input_i) }
 }
 
 async function main() {
@@ -250,6 +240,14 @@ async function main() {
     const { width, height, fps, duration } = info
     const stem = join(projectDir, basename(opts.input, extname(opts.input)))
 
+    if (opts.srt) {
+      const text = await page.evaluate(() => window.motion.srt())
+      if (!text) throw new Error('The composition has no captions layer.')
+      const file = opts.out ? resolve(opts.out) : `${stem}.srt`
+      writeFileSync(file, text)
+      console.log(file)
+      return
+    }
     if (opts.still) {
       for (const t of opts.still) {
         const data = await page.evaluate(([tt]) => window.motion.frame(tt, 'png', true), [t])
@@ -287,12 +285,32 @@ async function main() {
       return
     }
 
-    const audio = audioArgs(info.mix, comp.assets ?? {}, projectDir, from, to - from)
+    // The mix is rendered in the page (the same Web Audio graph as the preview), then normalized here.
+    let audioFile = null
+    if (info.audioSources.length || (comp.audio ?? []).some((a) => a.sfx)) {
+      const audioOverrides = {}
+      for (const src of info.audioSources) {
+        if (/^https?:/.test(src)) continue
+        const file = resolve(projectDir, src)
+        if (existsSync(file) && hasAudio(file)) audioOverrides[src] = `${origin}/__cache/${basename(toWav(file, cacheDir))}`
+      }
+      const mixed = await page.evaluate(([f, d, o]) => window.motion.mixdown(f, d, o), [from, to - from, audioOverrides])
+      if (mixed) {
+        const raw = join(cacheDir, `mix-${process.pid}.wav`)
+        writeFileSync(raw, Buffer.from(mixed.data, 'base64'))
+        const target = comp.mix?.loudness ?? -14
+        if (target === false) audioFile = raw
+        else {
+          const n = loudnorm(raw, join(cacheDir, `mix-${process.pid}-norm.wav`), target)
+          audioFile = n.file
+          if (Number.isFinite(n.before)) console.log(`audio: ${n.before.toFixed(1)} → ${target} LUFS`)
+        }
+      }
+    }
     const args = [
       '-y', '-loglevel', 'error',
       '-f', 'image2pipe', '-framerate', String(fps), '-c:v', opts.png ? 'png' : 'mjpeg', '-i', '-',
-      ...(audio ? audio.inputs : []),
-      ...(audio ? ['-filter_complex', audio.filter, '-map', '0:v', '-map', '[aout]', '-c:a', 'aac', '-b:a', '192k'] : []),
+      ...(audioFile ? ['-i', audioFile, '-map', '0:v', '-map', '1:a', '-c:a', 'aac', '-b:a', '256k', '-ar', '48000'] : []),
       '-vf', 'scale=out_color_matrix=bt709:out_range=tv,format=yuv420p',
       '-c:v', 'libx264', '-preset', 'slow', '-crf', String(opts.crf), '-tune', 'animation',
       '-colorspace', 'bt709', '-color_primaries', 'bt709', '-color_trc', 'bt709',

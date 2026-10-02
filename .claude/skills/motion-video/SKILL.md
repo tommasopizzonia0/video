@@ -5,7 +5,8 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
 
 # Making a video with the Motion engine
 
-1. Read `docs/MOTION.md` (the format) and look at `examples/launch.json` for a complete, polished reference.
+1. Read `docs/MOTION.md` (the format) and look at `examples/launch.json` for a complete, polished reference
+   (`examples/social-reel.json` shows curve transitions, sound effects on the cuts and captions).
 2. Plan before writing: format (1080×1920 for Reels/TikTok, 1920×1080 for YouTube, 1080×1080 for feeds),
    total length, and one line per scene (what is said, what moves). 2–4 s per scene.
 3. Write the composition JSON next to its assets (images, videos, music go in `assets` with paths
@@ -22,5 +23,7 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
 Design rules that matter most: one accent color and one accent serif word per headline; headlines enter
 with `maskUp` by word, secondary text later with `fadeUp`; ease out (`smooth`, `outExpo`), never linear
 arrivals; slow background drift so no frame is static; `grain` ~0.04 and `vignette` ~0.3 for finish;
-`motionBlur` for fast moves. When the engine can't express something, extend the engine
+`motionBlur` for fast moves. Social and ads: `curve` transitions in one direction, a `sfx` on each cut
+(cued with `scene`), `captions` on anything spoken (most feeds play muted), and leave `mix.loudness` at
+-14 LUFS. When the engine can't express something, extend the engine
 (`src/engine/`, with a test in `src/engine/engine.test.ts`) rather than faking it.
