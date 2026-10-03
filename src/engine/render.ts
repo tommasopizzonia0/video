@@ -128,6 +128,15 @@ export interface RenderOptions {
   scale?: number
 }
 
+/**
+ * `n` times spread over a shutter of `shutter` seconds centered on `t`, kept inside the comp
+ * so the first and last frames don't blend in the empty background before 0 or after the end.
+ */
+export function shutterTimes(t: number, n: number, shutter: number, duration: number): number[] {
+  const last = Math.max(0, duration - 1e-6)
+  return Array.from({ length: n }, (_, i) => Math.min(last, Math.max(0, t - shutter / 2 + (shutter * i) / (n - 1))))
+}
+
 export class Renderer {
   readonly comp: Composition
   readonly width: number
@@ -160,8 +169,7 @@ export class Renderer {
     const mb = this.comp.effects?.motionBlur
     const n = motionBlur && mb ? Math.max(1, Math.round(mb.samples ?? 6)) : 1
     if (n === 1) return [t]
-    const shutter = (mb!.shutter ?? 0.5) / this.fps
-    return Array.from({ length: n }, (_, i) => t - shutter / 2 + (shutter * i) / (n - 1))
+    return shutterTimes(t, n, (mb!.shutter ?? 0.5) / this.fps, this.duration)
   }
 
   /** Draws comp time `t`. Video frames for every sampled time must already be prepared. */

@@ -8,6 +8,7 @@ import { shapedTransition } from './transitions'
 import { mixColors, parseColor } from './color'
 import { cubicBezier, getEase, spring } from './easing'
 import { presetMod } from './presets'
+import { shutterTimes } from './render'
 import { formatCounter, layoutText, unitOrder } from './text'
 import { activeScenes, compDuration, sceneStarts } from './timeline'
 import type { Composition, Scene, TextLayer } from './types'
@@ -336,5 +337,14 @@ describe('validation', () => {
       if (file.includes('/_')) continue
       expect(parseComposition(text).issues, file).toEqual([])
     }
+  })
+})
+
+describe('motion blur', () => {
+  it('keeps shutter samples inside the comp', () => {
+    expect(shutterTimes(0, 3, 0.02, 5)).toEqual([0, 0, 0.01])
+    const end = shutterTimes(5, 3, 0.02, 5)
+    expect(Math.max(...end)).toBeLessThan(5)
+    expect(shutterTimes(1, 3, 0.02, 5)).toEqual([0.99, 1, 1.01])
   })
 })
