@@ -2,10 +2,11 @@
 
 import { ALL_FORMATS, BlobSource, CanvasSink, Input, UrlSource, type WrappedCanvas } from 'mediabunny'
 import { audioMix } from './audio'
+import { wordsFromJson, wordsFromSrt } from './captions'
 import { BUILTIN_FONT_FILES } from './fonts'
 import type { Drawable, Resources, VideoRequest } from './render'
 import { DEFAULT_FONT } from './text'
-import type { Composition, FontSource, Layer } from './types'
+import type { CaptionWord, Composition, FontSource, Layer } from './types'
 
 /** Turns an asset `src` into something loadable: a URL or a File the user dropped. */
 export type Resolver = (src: string) => string | Blob
@@ -74,6 +75,8 @@ function usedFonts(comp: Composition): Set<string> {
       if (l.type === 'text') {
         used.add(l.font ?? DEFAULT_FONT)
         if (l.accent?.font) used.add(l.accent.font)
+      } else if (l.type === 'captions') {
+        used.add(l.font ?? DEFAULT_FONT)
       } else if (l.type === 'group') visit(l.layers)
     }
   }
@@ -101,11 +104,19 @@ async function loadImage(source: string | Blob): Promise<Drawable> {
   return { source: bitmap, width: bitmap.width, height: bitmap.height }
 }
 
+async function loadWords(source: string | Blob, name: string): Promise<CaptionWord[]> {
+  const text = typeof source === 'string' ? await (await fetch(source)).text() : await source.text()
+  const words = /\.(srt|vtt)$/i.test(name) || /-->/.test(text.slice(0, 400)) ? wordsFromSrt(text) : wordsFromJson(JSON.parse(text))
+  if (!words.length) throw new Error('no words with timings found')
+  return words
+}
+
 export class BrowserResources implements Resources {
   private images = new Map<string, Drawable>()
   private videos = new Map<string, VideoAsset>()
   private frames = new Map<string, Drawable>()
   private lengths = new Map<string, number>()
+  private words = new Map<string, CaptionWord[]>()
   private comp: Composition
   private resolve: Resolver
 
@@ -131,6 +142,7 @@ export class BrowserResources implements Resources {
       try {
         if (asset.type === 'image') res.images.set(id, await loadImage(resolve(asset.src)))
         if (asset.type === 'video') res.videos.set(id, await res.openVideo(resolve(asset.src)))
+        if (asset.type === 'captions') res.words.set(id, await loadWords(resolve(asset.src), asset.src))
       } catch (e) {
         throw new Error(`Asset "${id}" (${asset.src}): ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -175,6 +187,10 @@ export class BrowserResources implements Resources {
     return this.frames.get(`${asset}|${time}`) ?? null
   }
 
+  captions(asset: string): CaptionWord[] | null {
+    return this.words.get(asset) ?? null
+  }
+
   videoSize(asset: string) {
     const v = this.videos.get(asset)
     return v ? { width: v.width, height: v.height } : null
@@ -191,14 +207,17 @@ export class BrowserResources implements Resources {
     return len
   }
 
-  /** Decoded audio for every asset the mix uses. Sources without sound are skipped. */
-  async audioBuffers(ctx: BaseAudioContext): Promise<Map<string, AudioBuffer>> {
+  /**
+   * Decoded audio for every asset the mix uses. Sources without sound are skipped. `audioSrc` can
+   * point an asset at a different file for its sound (the CLI passes WAV copies Chromium can decode).
+   */
+  async audioBuffers(ctx: BaseAudioContext, audioSrc: (src: string) => string | undefined = () => undefined): Promise<Map<string, AudioBuffer>> {
     const out = new Map<string, AudioBuffer>()
-    const ids = new Set(audioMix(this.comp).map((c) => c.asset))
+    const ids = new Set(audioMix(this.comp).flatMap((c) => (c.asset ? [c.asset] : [])))
     for (const id of ids) {
       const asset = this.comp.assets?.[id]
       if (!asset) continue
-      const src = this.resolve(asset.src)
+      const src = audioSrc(asset.src) ?? this.resolve(asset.src)
       try {
         const data = typeof src === 'string' ? await (await fetch(src)).arrayBuffer() : await src.arrayBuffer()
         out.set(id, await ctx.decodeAudioData(data))

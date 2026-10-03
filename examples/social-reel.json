@@ -1,0 +1,77 @@
+{
+  "comment": "Social reel showing the new tools: cut-the-curve transitions, built-in sound effects cued on the cuts, word-by-word captions and a mix normalized to -14 LUFS.",
+  "width": 1080,
+  "height": 1920,
+  "fps": 30,
+  "background": "#0b0b10",
+  "mix": { "loudness": -14 },
+  "audio": [
+    { "sfx": "riser", "start": 1.9, "duration": 1.2, "volume": 0.6 },
+    { "sfx": "impact", "scene": "due", "start": 0 },
+    { "sfx": "whoosh", "scene": "tre", "start": 0 },
+    { "sfx": "pop", "start": 0.35 },
+    { "sfx": "sparkle", "scene": "quattro", "start": 0.2, "volume": 0.7 }
+  ],
+  "scenes": [
+    {
+      "id": "uno",
+      "duration": 2.2,
+      "layers": [
+        { "type": "ellipse", "width": 1000, "height": 1000, "x": 300, "y": 700, "fill": "#ff4d6d", "opacity": 0.45, "blur": 200 },
+        { "type": "text", "text": "Il montaggio {che tiene.}", "y": 820, "width": 900, "size": 120, "weight": 800, "color": "#ffffff",
+          "accent": { "color": "#ffd166" },
+          "animate": { "by": "word", "preset": "maskUp", "stagger": 0.08, "duration": 0.7, "delay": 0.2 } }
+      ]
+    },
+    {
+      "id": "due",
+      "duration": 2.4,
+      "transition": { "type": "zoomThrough" },
+      "layers": [
+        { "type": "rect", "width": 1080, "height": 1920, "fill": "#14213d" },
+        { "type": "text", "text": "Stacchi che seguono il movimento", "y": 760, "width": 880, "size": 104, "weight": 800, "color": "#ffffff",
+          "animate": { "by": "word", "preset": "fadeUp", "stagger": 0.06, "duration": 0.6 } }
+      ]
+    },
+    {
+      "id": "tre",
+      "duration": 2.4,
+      "transition": { "type": "curve", "direction": "left" },
+      "layers": [
+        { "type": "rect", "width": 1080, "height": 1920, "fill": "#ef476f" },
+        { "type": "text", "text": "Suoni sul taglio", "y": 760, "width": 880, "size": 120, "weight": 800, "color": "#ffffff",
+          "animate": { "by": "word", "preset": "fadeUp", "stagger": 0.06, "duration": 0.6 } }
+      ]
+    },
+    {
+      "id": "quattro",
+      "duration": 2.6,
+      "transition": { "type": "flash" },
+      "layers": [
+        { "type": "ellipse", "width": 1100, "height": 1100, "x": 780, "y": 1100, "fill": "#7c5cff", "opacity": 0.5, "blur": 200 },
+        { "type": "text", "text": "E sottotitoli parola per parola", "y": 760, "width": 880, "size": 100, "weight": 800, "color": "#ffffff",
+          "animate": { "by": "word", "preset": "maskUp", "stagger": 0.06, "duration": 0.6 } }
+      ]
+    }
+  ],
+  "layers": [
+    { "type": "captions", "uppercase": true, "words": [
+      { "text": "Ogni", "start": 0.3, "end": 0.6 },
+      { "text": "taglio", "start": 0.6, "end": 1.0 },
+      { "text": "ha", "start": 1.0, "end": 1.2 },
+      { "text": "un", "start": 1.2, "end": 1.35 },
+      { "text": "motivo.", "start": 1.35, "end": 1.9 },
+      { "text": "Lo", "start": 2.3, "end": 2.5 },
+      { "text": "sguardo", "start": 2.5, "end": 2.9 },
+      { "text": "non", "start": 2.9, "end": 3.1 },
+      { "text": "si", "start": 3.1, "end": 3.25 },
+      { "text": "ferma,", "start": 3.25, "end": 3.8 },
+      { "text": "il", "start": 4.4, "end": 4.55 },
+      { "text": "suono", "start": 4.55, "end": 4.95 },
+      { "text": "arriva", "start": 4.95, "end": 5.4 },
+      { "text": "puntuale.", "start": 5.4, "end": 6.1 },
+      { "text": "Provalo", "start": 6.8, "end": 7.3 },
+      { "text": "oggi.", "start": 7.3, "end": 8.0 }
+    ] }
+  ]
+}

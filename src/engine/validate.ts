@@ -4,6 +4,7 @@
 import { parseColor } from './color'
 import { isKnownEase } from './easing'
 import { PRESET_NAMES } from './presets'
+import { SFX_NAMES } from './sfx'
 import type { Composition } from './types'
 
 export interface Issue {
@@ -38,14 +39,18 @@ const layerKeys: Record<string, string[]> = {
   image: ['asset', 'width', 'height', 'fit', 'radius'],
   video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted'],
   group: ['layers', 'width', 'height', 'clip', 'radius', 'fill', 'stroke'],
+  captions: [
+    'words', 'asset', 'mode', 'maxWords', 'maxChars', 'font', 'size', 'weight', 'italic', 'color', 'highlight',
+    'uppercase', 'stroke', 'background', 'width', 'letterSpacing', 'lineHeight',
+  ],
 }
 const animatable = new Set([
   'x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast',
   'saturate', 'grayscale', 'hueRotate', 'width', 'height', 'radius', 'trimStart', 'trimEnd',
 ])
-const compKeys = ['$schema', 'comment', 'width', 'height', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'scenes', 'layers', 'effects']
+const compKeys = ['$schema', 'comment', 'width', 'height', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects']
 const sceneKeys = ['id', 'comment', 'duration', 'background', 'layers', 'transition']
-const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris']
+const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
 const blendModes = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
   'soft-light', 'difference', 'exclusion', 'add',
@@ -109,7 +114,7 @@ export function validate(input: unknown): Issue[] {
       err(p, 'Must be { "type": "image" | "video" | "audio", "src": "..." }.')
       continue
     }
-    if (!['image', 'video', 'audio'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video" or "audio".')
+    if (!['image', 'video', 'audio', 'captions'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio" or "captions".')
     if (typeof a.src !== 'string' || !a.src) err(`${p}.src`, 'Must be a path relative to the composition file, or a URL.')
   }
 
@@ -220,7 +225,7 @@ export function validate(input: unknown): Issue[] {
       if (!isObj(l.shadow)) err(`${path}.shadow`, 'Must be { color, blur, x, y }.')
       else if (l.shadow.color !== undefined) checkColor(l.shadow.color, `${path}.shadow.color`)
     }
-    if (l.stroke !== undefined) {
+    if (l.stroke !== undefined && !(type === 'captions' && l.stroke === false)) {
       if (!isObj(l.stroke)) err(`${path}.stroke`, 'Must be { "color", "width" }.')
       else checkColor(l.stroke.color, `${path}.stroke.color`)
     }
@@ -266,6 +271,28 @@ export function validate(input: unknown): Issue[] {
       case 'group':
         checkLayers(l.layers, `${path}.layers`)
         break
+      case 'captions': {
+        if (l.words === undefined && l.asset === undefined) err(path, 'Captions need "words" ([{ text, start, end }]) or a "captions" asset.')
+        if (l.words !== undefined) {
+          if (!Array.isArray(l.words)) err(`${path}.words`, 'Must be a list of { "text", "start", "end" } in seconds.')
+          else
+            l.words.forEach((w, i) => {
+              if (!isObj(w) || typeof w.text !== 'string' || !isNum(w.start) || !isNum(w.end)) err(`${path}.words[${i}]`, 'A word is { "text": "...", "start": s, "end": s }.')
+              else if (w.end < w.start) err(`${path}.words[${i}].end`, 'Ends before it starts.')
+            })
+        }
+        if (l.asset !== undefined) {
+          const a = assets[l.asset as string]
+          if (!a) err(`${path}.asset`, `No asset "${String(l.asset)}" in "assets".`)
+          else if (a.type !== 'captions') err(`${path}.asset`, `Asset "${String(l.asset)}" is a ${a.type}; captions need a "captions" asset.`)
+        }
+        if (l.mode !== undefined && !['highlight', 'reveal'].includes(l.mode as string)) err(`${path}.mode`, 'Must be "highlight" or "reveal".')
+        for (const k of ['color', 'highlight'] as const) if (l[k] !== undefined) checkColor(l[k], `${path}.${k}`)
+        for (const k of ['maxWords', 'maxChars', 'size'] as const) if (l[k] !== undefined && (!isNum(l[k]) || (l[k] as number) <= 0)) err(`${path}.${k}`, 'Must be a positive number.')
+        if (typeof l.font === 'string' && !fonts.has(l.font)) warn(`${path}.font`, `Font "${l.font}" is not built in or declared in "fonts".${suggest(l.font, [...fonts])}`)
+        if (isObj(l.background)) checkFill(l.background.fill, `${path}.background.fill`)
+        break
+      }
     }
   }
 
@@ -284,7 +311,8 @@ export function validate(input: unknown): Issue[] {
           if (!isObj(tr) || !transitionTypes.includes(tr.type as string))
             err(`${p}.transition`, `Must be { "type": ${transitionTypes.map((t) => `"${t}"`).join(' | ')}, "duration"?, "ease"?, "direction"? }.`)
           else {
-            keys(tr, ['type', 'duration', 'ease', 'direction', 'color'], `${p}.transition`)
+            keys(tr, ['type', 'duration', 'ease', 'direction', 'color', 'blur', 'distance'], `${p}.transition`)
+            if (tr.color !== undefined) checkColor(tr.color, `${p}.transition.color`)
             checkEase(tr.ease, `${p}.transition.ease`)
             if (i === 0) warn(`${p}.transition`, 'The first scene has nothing to transition from; ignored.')
           }
@@ -300,11 +328,38 @@ export function validate(input: unknown): Issue[] {
       comp.audio.forEach((a, i) => {
         const p = `audio[${i}]`
         if (!isObj(a)) return err(p, 'Must be { "asset": "...", ... }.')
-        keys(a, ['asset', 'start', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut'], p)
-        const asset = assets[a.asset as string]
-        if (!asset) err(`${p}.asset`, `No asset "${String(a.asset)}" in "assets".`)
-        else if (asset.type === 'image') err(`${p}.asset`, 'An image has no audio.')
+        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        if (a.sfx !== undefined) {
+          if (!SFX_NAMES.includes(a.sfx as never)) err(`${p}.sfx`, `Unknown sound effect "${String(a.sfx)}".${suggest(String(a.sfx), SFX_NAMES)} Options: ${SFX_NAMES.join(', ')}.`)
+          if (a.asset !== undefined) err(p, 'Use either "asset" or "sfx", not both.')
+        } else {
+          const asset = assets[a.asset as string]
+          if (!asset) err(`${p}.asset`, `No asset "${String(a.asset)}" in "assets".${typeof a.asset === 'string' ? suggest(a.asset, Object.keys(assets)) : ' Add "asset" or a built-in "sfx".'}`)
+          else if (asset.type === 'image') err(`${p}.asset`, 'An image has no audio.')
+        }
+        if (a.role !== undefined && !['music', 'voice', 'sfx'].includes(a.role as string)) err(`${p}.role`, 'Must be "music", "voice" or "sfx".')
+        if (a.scene !== undefined) {
+          const scenes = Array.isArray(comp.scenes) ? comp.scenes : []
+          const ok = typeof a.scene === 'number' ? Number.isInteger(a.scene) && a.scene >= 0 && a.scene < scenes.length : scenes.some((sc) => isObj(sc) && sc.id === a.scene)
+          if (!ok) err(`${p}.scene`, `No scene "${String(a.scene)}". Use a scene "id" or its index in "scenes".`)
+        }
+        checkAnim(a.volume, `${p}.volume`, 'number')
+        for (const k of ['start', 'sourceStart', 'duration', 'fadeIn', 'fadeOut'] as const)
+          if (a[k] !== undefined && !isNum(a[k])) err(`${p}.${k}`, 'Must be a number of seconds.')
       })
+  }
+  if (comp.mix !== undefined) {
+    if (!isObj(comp.mix)) err('mix', 'Must be { "loudness"?: LUFS | false, "duck"?: {...} | false }.')
+    else {
+      keys(comp.mix, ['loudness', 'duck'], 'mix')
+      const l = comp.mix.loudness
+      if (l !== undefined && l !== false && (!isNum(l) || l > -5 || l < -40)) err('mix.loudness', 'Must be a target in LUFS between -40 and -5 (social: -14), or false.')
+      const d = comp.mix.duck
+      if (d !== undefined && d !== false) {
+        if (!isObj(d)) err('mix.duck', 'Must be { amount?, attack?, release?, threshold? } or false.')
+        else keys(d, ['amount', 'attack', 'release', 'threshold'], 'mix.duck')
+      }
+    }
   }
   if (comp.effects !== undefined) {
     if (!isObj(comp.effects)) err('effects', 'Must be { grain?, vignette?, motionBlur? }.')

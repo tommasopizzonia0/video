@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { valueAt } from './animate'
-import { audioMix } from './audio'
+import { audioMix, clipGain } from './audio'
+import { captionPages, pageAt, toSrt, wordsFromJson, wordsFromSrt } from './captions'
+import { integratedLoudness, normalizationGain } from './loudness'
+import { SFX_NAMES, synthSfx } from './sfx'
+import { shapedTransition } from './transitions'
 import { mixColors, parseColor } from './color'
 import { cubicBezier, getEase, spring } from './easing'
 import { presetMod } from './presets'
@@ -153,8 +157,139 @@ describe('audio mix', () => {
     }
     const mix = audioMix(comp)
     expect(mix).toHaveLength(2)
-    expect(mix[0]).toMatchObject({ asset: 'm', start: 0, duration: 7, volume: 0.5 })
+    expect(mix[0]).toMatchObject({ asset: 'm', role: 'music', start: 0, duration: 7, volume: 0.5 })
     expect(mix[1]).toMatchObject({ asset: 'v', start: 0, sourceStart: 2, duration: 4 })
+  })
+})
+
+describe('velocity-matched transitions', () => {
+  const W = 1920
+  const H = 1080
+  it('curve: one scene per frame, same direction on both sides, continuous speed at the cut', () => {
+    const tr = { type: 'curve' as const, direction: 'left' as const }
+    const pos = (p: number) => {
+      const f = shapedTransition(tr, p, W, H)!
+      expect(Boolean(f.a) !== Boolean(f.b)).toBe(true)
+      return (f.a ?? f.b)!.dx
+    }
+    // Old scene moves left (negative), new scene arrives from the right (positive) and settles at 0.
+    expect(pos(0.3)).toBeLessThan(0)
+    expect(pos(0.6)).toBeGreaterThan(0)
+    expect(pos(1)).toBeCloseTo(0, 6)
+    // Both halves travel leftward: x decreases on each side of the cut.
+    expect(pos(0.44)).toBeLessThan(pos(0.4))
+    expect(pos(0.5)).toBeLessThan(pos(0.46))
+    // Partial travel: about 12% of the width.
+    expect(Math.abs(pos(0.4499))).toBeGreaterThan(0.1 * W)
+    expect(Math.abs(pos(0.4499))).toBeLessThan(0.13 * W)
+    // Peak speed on both sides of the cut is of the same order (velocity matched).
+    const dt = 0.002
+    const vOut = Math.abs(pos(0.4499) - pos(0.4499 - dt)) / dt
+    const vIn = Math.abs(pos(0.4501 + dt) - pos(0.4501)) / dt
+    expect(vIn / vOut).toBeGreaterThan(0.6)
+    expect(vIn / vOut).toBeLessThan(1.7)
+  })
+  it('zoomThrough grows on both sides, zoomBack shrinks on both sides', () => {
+    for (const [type, sign] of [['zoomThrough', 1], ['zoomBack', -1]] as const) {
+      const scale = (p: number) => {
+        const f = shapedTransition({ type }, p, W, H)!
+        return (f.a ?? f.b)!.scale
+      }
+      expect(Math.sign(scale(0.2) - scale(0.1))).toBe(sign)
+      expect(Math.sign(scale(0.6) - scale(0.4))).toBe(sign)
+      expect(scale(1)).toBeCloseTo(1, 3)
+    }
+  })
+  it('flash peaks on the cut and is gone at the ends', () => {
+    const alpha = (p: number) => shapedTransition({ type: 'flash' }, p, W, H)!.overlay!.alpha
+    expect(alpha(0)).toBe(0)
+    expect(alpha(0.4999)).toBeGreaterThan(0.95)
+    expect(alpha(1)).toBeCloseTo(0, 6)
+    expect(shapedTransition({ type: 'fade' }, 0.5, W, H)).toBeNull()
+  })
+  it('new transitions run linearly by default and have their own durations', () => {
+    const scenes: Scene[] = [
+      { duration: 2, layers: [] },
+      { duration: 2, layers: [], transition: { type: 'curve' } },
+    ]
+    expect(sceneStarts(scenes)).toEqual([0, 1.4])
+    expect(activeScenes(scenes, 1.7)[1].enter).toBeCloseTo(0.5, 6)
+  })
+})
+
+describe('sound effects and loudness', () => {
+  it('every effect is deterministic, bounded and peaks where it says', () => {
+    for (const name of SFX_NAMES) {
+      const a = synthSfx(name, 48000)
+      const b = synthSfx(name, 48000)
+      expect(a.samples).toEqual(b.samples)
+      const max = Math.max(...a.samples.map(Math.abs))
+      expect(max).toBeGreaterThan(0.2)
+      expect(max).toBeLessThanOrEqual(0.61)
+      expect(a.peak).toBeGreaterThanOrEqual(0)
+      expect(a.peak).toBeLessThan(a.samples.length / 48000)
+    }
+  })
+  it('measures a -20 dBFS 1 kHz stereo sine at about -20 LUFS and normalizes it', () => {
+    const rate = 48000
+    const sine = new Float32Array(rate * 3).map((_, i) => 0.1 * Math.sin((2 * Math.PI * 1000 * i) / rate))
+    expect(integratedLoudness([sine, sine], rate)).toBeCloseTo(-20, 0)
+    expect(20 * Math.log10(normalizationGain([sine, sine], rate, -14))).toBeCloseTo(6, 0)
+    // The peak ceiling wins over the loudness target.
+    expect(normalizationGain([sine, sine], rate, 0)).toBeCloseTo(10 ** (-1 / 20) / 0.1, 2)
+    expect(integratedLoudness([new Float32Array(rate)], rate)).toBe(-Infinity)
+  })
+  it('places effects by their peak, relative to scenes, with keyframed volume', () => {
+    const comp: Composition = {
+      width: 100,
+      height: 100,
+      assets: { m: { type: 'audio', src: 'm.mp3' }, vo: { type: 'audio', src: 'vo.wav' } },
+      audio: [
+        { asset: 'm', volume: [{ t: 0, v: 0 }, { t: 2, v: 1, ease: 'linear' }] },
+        { asset: 'vo', role: 'voice', start: 1 },
+        { sfx: 'whoosh', scene: 'b', start: 0 },
+        { sfx: 'impact', start: 0 },
+      ],
+      scenes: [
+        { duration: 3, layers: [] },
+        { id: 'b', duration: 3, layers: [] },
+      ],
+    }
+    const mix = audioMix(comp)
+    const whoosh = mix.find((c) => c.sfx?.name === 'whoosh')!
+    // The whoosh peaks right on the start of scene "b" (t = 3).
+    expect(whoosh.start + synthSfx('whoosh', 8000).peak).toBeCloseTo(3, 3)
+    const impact = mix.find((c) => c.sfx?.name === 'impact')!
+    expect(impact.start).toBe(0)
+    expect(impact.sourceStart).toBeGreaterThan(0)
+    const music = mix.find((c) => c.asset === 'm')!
+    expect(clipGain(music, 1, null)).toBeCloseTo(0.5, 6)
+    // A voice makes the music duck; turning it off removes it.
+    expect(music.duck).toBeDefined()
+    expect(audioMix({ ...comp, mix: { duck: false } }).find((c) => c.asset === 'm')!.duck).toBeUndefined()
+  })
+})
+
+describe('captions', () => {
+  const words = 'Questo video dice a tutti che funziona, davvero. Fine'.split(' ').map((text, i) => ({ text, start: i * 0.3, end: i * 0.3 + 0.25 }))
+  it('groups words into short pages, breaking on punctuation and pauses', () => {
+    const pages = captionPages(words, 3, 22)
+    expect(pages.map((p) => p.words.map((w) => w.text).join(' '))).toEqual(['Questo video dice', 'a tutti che', 'funziona,', 'davvero.', 'Fine'])
+    // Pages never overlap and stay up long enough to read.
+    for (let i = 1; i < pages.length; i++) expect(pages[i].start).toBeGreaterThanOrEqual(pages[i - 1].end)
+    expect(pages[pages.length - 1].end - pages[pages.length - 1].start).toBeGreaterThanOrEqual(0.7 - 1e-9)
+    expect(pageAt(pages, 0.1)).toBe(0)
+    expect(pageAt(pages, 99)).toBe(-1)
+  })
+  it('reads Whisper JSON, word lists and SRT, and writes SRT', () => {
+    const whisper = { segments: [{ words: [{ word: ' Ciao', start: 0, end: 0.4 }, { word: 'ne', start: 0.4, end: 0.5 }, { word: ' mondo', start: 0.6, end: 1 }] }] }
+    expect(wordsFromJson(whisper).map((w) => w.text)).toEqual(['Ciaone', 'mondo'])
+    expect(wordsFromJson([{ text: 'a', start: 0, end: 1 }])).toHaveLength(1)
+    const srt = wordsFromSrt('1\n00:00:01,000 --> 00:00:02,000\nuno due\n')
+    expect(srt.map((w) => w.text)).toEqual(['uno', 'due'])
+    expect(srt[0].start).toBe(1)
+    expect(srt[1].end).toBeCloseTo(2, 6)
+    expect(toSrt([{ start: 61.5, end: 62, text: 'ok' }])).toBe('1\n00:01:01,500 --> 00:01:02,000\nok\n')
   })
 })
 
@@ -176,6 +311,23 @@ describe('validation', () => {
     const r = parseComposition(JSON.stringify({ width: 10, height: 10, duration: 1, layers: [{ type: 'image', asset: 'logo' }] }))
     expect(r.comp).toBeNull()
     expect(r.issues[0].message).toContain('No asset "logo"')
+  })
+  it('checks sound effects, cues, mix settings and captions', () => {
+    const issues = validate({
+      width: 100,
+      height: 100,
+      mix: { loudness: 3, duk: {} },
+      audio: [{ sfx: 'woosh' }, { sfx: 'pop', scene: 'nope' }],
+      scenes: [{ duration: 1, layers: [{ type: 'captions' }, { type: 'captions', words: [{ text: 'a', start: 1, end: 0 }] }], transition: { type: 'curv' } }],
+    })
+    const msg = issues.map((i) => `${i.level} ${i.path}: ${i.message}`).join('\n')
+    expect(msg).toContain('error audio[0].sfx: Unknown sound effect "woosh". Did you mean "whoosh"?')
+    expect(msg).toContain('error audio[1].scene')
+    expect(msg).toContain('error mix.loudness')
+    expect(msg).toContain('warning mix.duk')
+    expect(msg).toContain('error scenes[0].layers[0]: Captions need')
+    expect(msg).toContain('error scenes[0].layers[1].words[0].end')
+    expect(msg).toContain('error scenes[0].transition')
   })
   it('accepts every example', () => {
     const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })

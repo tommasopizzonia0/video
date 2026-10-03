@@ -13,7 +13,11 @@ import {
   type Unit,
 } from './text'
 import { activeScenes, compDuration, layerWindow } from './timeline'
+import { shapedTransition, type Pose } from './transitions'
+import { captionPages, pageAt, type CaptionPage } from './captions'
 import type {
+  CaptionWord,
+  CaptionsLayer,
   Composition,
   Fill,
   GroupLayer,
@@ -43,6 +47,8 @@ export interface Resources {
   videoFrame(asset: string, time: number): Drawable | null
   videoSize(asset: string): { width: number; height: number } | null
   pathLength(d: string): number
+  /** Word timings of a "captions" asset. */
+  captions?(asset: string): CaptionWord[] | null
 }
 
 export interface VideoRequest {
@@ -301,6 +307,29 @@ function composeTransition(env: Env, tr: Transition | undefined, p: number, a: A
     ctx.restore()
     if (small) env.pool.give(small.canvas)
   }
+  const shaped = tr ? shapedTransition(tr, p, W, H) : null
+  if (shaped) {
+    const pose = (c: AnyCanvas | null, q: Pose | null) => {
+      if (!c || !q) return
+      if (!q.smear) return draw(c, q.alpha, q.dx, q.dy, q.scale, q.blur)
+      // Directional smear: a running average of copies spread along the motion.
+      const n = 7
+      for (let i = 0; i < n; i++) {
+        const f = i / (n - 1) - 0.5
+        draw(c, q.alpha / (i + 1), q.dx + q.smear[0] * f, q.dy + q.smear[1] * f, q.scale, q.blur)
+      }
+    }
+    pose(a, shaped.a)
+    pose(b, shaped.b)
+    if (shaped.overlay && shaped.overlay.alpha > 0) {
+      ctx.save()
+      ctx.globalAlpha = Math.min(1, shaped.overlay.alpha)
+      ctx.fillStyle = shaped.overlay.color
+      ctx.fillRect(0, 0, W, H)
+      ctx.restore()
+    }
+    return
+  }
   const type = tr?.type ?? 'fade'
   const dir = tr?.direction ?? 'left'
   const vx = dir === 'left' ? -1 : dir === 'right' ? 1 : 0
@@ -426,6 +455,10 @@ function boxSize(env: Env, layer: Layer, lt: number, pw: number, ph: number): [n
     }
     case 'group':
       return [num(layer.width, lt, pw), num(layer.height, lt, ph)]
+    case 'captions': {
+      const page = captionState(env, layer, lt)
+      return page ? [page.layout.w, page.layout.h] : [0, 0]
+    }
     case 'image':
     case 'video': {
       const natural = layer.type === 'image' ? env.res.image(layer.asset) : env.res.videoSize(layer.asset)
@@ -551,7 +584,8 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   const e: Env = { ...env, ctx: target }
 
   const x = num(layer.x, lt, pw / 2)
-  const y = num(layer.y, lt, ph / 2)
+  // Captions sit in the lower third by default, clear of the platform buttons at the very bottom.
+  const y = num(layer.y, lt, layer.type === 'captions' ? ph * (ph > pw ? 0.7 : 0.84) : ph / 2)
   const [ax, ay] = layer.anchor ?? [0.5, 0.5]
   const scale = num(layer.scale, lt, 1) * mod.scale
   target.translate(x + mod.dx, y + mod.dy)
@@ -631,6 +665,8 @@ function drawContent(env: Env, layer: Layer, lt: number, duration: number, bw: n
     }
     case 'group':
       return drawGroup(env, layer, lt, duration, bw, bh)
+    case 'captions':
+      return drawCaptions(env, layer, lt)
   }
 }
 
@@ -885,4 +921,136 @@ function combine(a: Mod, b: Mod): Mod {
     innerX: a.innerX + b.innerX,
     innerY: a.innerY + b.innerY,
   }
+}
+
+interface CaptionLine {
+  words: { text: string; x: number; w: number; index: number }[]
+  w: number
+}
+interface CaptionLayout {
+  lines: CaptionLine[]
+  w: number
+  h: number
+  lineHeight: number
+  font: string
+  size: number
+}
+
+const captionCache = new WeakMap<CaptionsLayer, { pages: CaptionPage[]; layouts: Map<number, CaptionLayout> }>()
+
+function captionWords(env: Env, layer: CaptionsLayer): CaptionWord[] {
+  if (layer.words) return layer.words
+  return (layer.asset && env.res.captions?.(layer.asset)) || []
+}
+
+/** Default caption size: 72 px when the short side of the frame is 1080. */
+const captionSize = (env: Env, layer: CaptionsLayer) => layer.size ?? Math.round((72 * Math.min(env.W, env.H)) / 1080)
+
+/** The page visible at `lt` with its layout, or null between pages. */
+function captionState(env: Env, layer: CaptionsLayer, lt: number): { page: CaptionPage; layout: CaptionLayout } | null {
+  let cache = captionCache.get(layer)
+  if (!cache) {
+    cache = { pages: captionPages(captionWords(env, layer), layer.maxWords ?? 3, layer.maxChars ?? 22), layouts: new Map() }
+    if (cache.pages.length) captionCache.set(layer, cache)
+  }
+  const i = pageAt(cache.pages, lt)
+  if (i < 0) return null
+  const page = cache.pages[i]
+  let layout = cache.layouts.get(i)
+  if (!layout) {
+    const ctx = env.ctx
+    const size = captionSize(env, layer)
+    const font = `${layer.italic ? 'italic ' : ''}${layer.weight ?? 800} ${size}px ${JSON.stringify(layer.font ?? DEFAULT_FONT_FAMILY)}, sans-serif`
+    ctx.save()
+    ctx.font = font
+    ctx.letterSpacing = `${(layer.letterSpacing ?? 0) * size}px`
+    // Heavy outlined captions need a wider gap than a plain space, or the strokes of neighbours touch.
+    const space = ctx.measureText(' ').width * 1.5
+    const maxW = layer.width ?? env.W * 0.8
+    const lines: CaptionLine[] = []
+    let line: CaptionLine = { words: [], w: 0 }
+    page.words.forEach((word, index) => {
+      const text = layer.uppercase ? word.text.toUpperCase() : word.text
+      const w = ctx.measureText(text).width
+      const x = line.words.length ? line.w + space : 0
+      if (line.words.length && x + w > maxW) {
+        lines.push(line)
+        line = { words: [], w: 0 }
+        line.words.push({ text, x: 0, w, index })
+        line.w = w
+      } else {
+        line.words.push({ text, x, w, index })
+        line.w = x + w
+      }
+    })
+    if (line.words.length) lines.push(line)
+    ctx.restore()
+    const lineHeight = size * (layer.lineHeight ?? 1.12)
+    layout = { lines, w: Math.max(...lines.map((l) => l.w)), h: lineHeight * lines.length, lineHeight, font, size }
+    cache.layouts.set(i, layout)
+  }
+  return { page, layout }
+}
+
+const DEFAULT_FONT_FAMILY = 'Inter'
+
+function drawCaptions(env: Env, layer: CaptionsLayer, lt: number) {
+  const state = captionState(env, layer, lt)
+  if (!state) return
+  const { page, layout } = state
+  const ctx = env.ctx
+  const color = layer.color ?? '#ffffff'
+  const highlight = layer.highlight ?? '#FFE45E'
+  const stroke = layer.stroke === false ? null : (layer.stroke ?? { color: '#000000', width: Math.max(4, layout.size * 0.14) })
+  const reveal = layer.mode === 'reveal'
+  // The page arrives with a short pop; in reveal mode each word pops on its own start instead.
+  const pageIn = Math.min(1, (lt - page.start) / 0.12)
+
+  if (layer.background) {
+    const bg = layer.background
+    const [py, px] = typeof bg.padding === 'number' ? [bg.padding, bg.padding] : (bg.padding ?? [layout.size * 0.22, layout.size * 0.4])
+    ctx.save()
+    ctx.globalAlpha *= reveal ? 1 : pageIn
+    ctx.fillStyle = makeFill(ctx, bg.fill, lt, 0, 0, layout.w, layout.h)
+    ctx.beginPath()
+    ctx.roundRect(-px, -py, layout.w + px * 2, layout.h + py * 2, Math.min(bg.radius ?? layout.size * 0.3, (layout.h + py * 2) / 2))
+    ctx.fill()
+    ctx.restore()
+  }
+
+  ctx.font = layout.font
+  ctx.letterSpacing = `${(layer.letterSpacing ?? 0) * layout.size}px`
+  ctx.textBaseline = 'middle'
+  ctx.textAlign = 'left'
+  ctx.lineJoin = 'round'
+  const base = ctx.globalAlpha
+  layout.lines.forEach((line, li) => {
+    const ox = (layout.w - line.w) / 2
+    const cy = layout.lineHeight * (li + 0.5)
+    for (const word of line.words) {
+      const w = page.words[word.index]
+      const spoken = lt >= w.start
+      const active = spoken && (lt < w.end || word.index === page.words.length - 1 || lt < page.words[word.index + 1].start)
+      if (reveal && !spoken) continue
+      // Pop: a quick scale from 0.7 (reveal) or a small swell on the active word (highlight).
+      const since = lt - w.start
+      const pop = Math.min(1, Math.max(0, since / 0.16))
+      const ease = 1 - (1 - pop) ** 3
+      const scale = reveal ? 0.7 + 0.3 * ease + 0.06 * Math.sin(Math.PI * ease) : active ? 1 + 0.05 * Math.sin(Math.PI * Math.min(1, since / 0.22)) : 1
+      ctx.save()
+      ctx.globalAlpha = base * (reveal ? Math.min(1, since / 0.08) : 0.35 + 0.65 * pageIn)
+      const cx = ox + word.x + word.w / 2
+      ctx.translate(cx, cy)
+      ctx.scale(scale, scale)
+      if (!reveal && pageIn < 1) ctx.scale(0.92 + 0.08 * pageIn, 0.92 + 0.08 * pageIn)
+      if (stroke) {
+        ctx.strokeStyle = stroke.color
+        ctx.lineWidth = stroke.width ?? 10
+        ctx.strokeText(word.text, -word.w / 2, 0)
+      }
+      ctx.fillStyle = active ? highlight : color
+      ctx.fillText(word.text, -word.w / 2, 0)
+      ctx.restore()
+    }
+  })
 }

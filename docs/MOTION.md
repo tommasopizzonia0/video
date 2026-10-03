@@ -107,6 +107,17 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
 - **`group`** `layers`, `width`/`height` (default: parent size), `fill`, `stroke`, `radius`, `clip`.
   A group with `fill` + `radius` + `shadow` is a card. Animate a group to move everything in it
   (a "camera": scale/x/y keyframes on a full-frame group).
+- **`captions`** word-timed subtitles in the social style: short pages of 1–3 words, the spoken word
+  lit up. `words: [{ text, start, end }]` (seconds in the layer's time) or `asset` pointing to a
+  `"type": "captions"` asset: an `.srt` / `.vtt` file or JSON (Whisper or whisper.cpp output with word
+  timestamps, or a plain word list). `mode`: `highlight` (default, whole page shown, spoken word in
+  `highlight` color, default `#FFE45E`) or `reveal` (words pop in as they are said). `maxWords` (3),
+  `maxChars` (22), `font`, `size` (default 72 on 1080), `weight` (800), `italic`, `color`, `uppercase`,
+  `stroke` (black outline by default, `false` for none), `background` (a pill behind the page),
+  `width` (wrap width, default 80% of the frame), `letterSpacing`, `lineHeight`. Default position:
+  70% of the height on vertical videos (clear of the platform UI), 84% on horizontal ones.
+  Put it in the top-level `layers` so it runs across scenes. Word timings come from a transcription,
+  for example `whisper audio.mp3 --word_timestamps True --output_format json`.
 
 **Fills** are a color (`"#16b07a"`, `"rgba(0,0,0,.5)"`, `"hsl(...)"`) or a gradient:
 `{ "type": "linear", "angle": 135, "stops": [[0, "#7c5cff"], [1, "#2563eb"]] }` (CSS angles) or
@@ -130,10 +141,39 @@ Default timing: entrances 0.7 s with `smooth`, exits 0.45 s with `inCubic`, endi
 `zoom` (punch through), `blur`, `wipe`, `iris`. Options: `duration` (default 0.6), `ease`,
 `direction` (`left`, `right`, `up`, `down`).
 
+Velocity-matched transitions ("cut the curve"): the old scene accelerates out, the cut lands at peak
+speed and the new scene keeps moving the same way as it settles, so the eye reads one continuous move.
+Only one scene is on screen at any frame, never a dissolve. Their curves are built in (`ease` is ignored).
+
+- `curve` (0.6 s): a short push in `direction`, about 12% of the frame (`distance` in px to change it),
+  the new scene ignites at 35% opacity mid-path. Optional `blur`. The default for "next".
+- `zoomThrough` (0.7 s): everything grows through the cut, for going deeper. `zoomBack`: everything
+  shrinks, for pulling out. `blur` (default 12 on 1080).
+- `flash` (0.34 s): a hard cut hidden in a flash of `color` (white by default), for beats and drops.
+- `whip` (0.36 s): a fast pan well past the screen with a directional smear.
+
 ## Audio
 
-`audio` entries play assets on the comp timeline: `asset`, `start`, `sourceStart`, `duration`,
-`volume`, `fadeIn`, `fadeOut`. Unmuted `video` layers add their own sound automatically.
+`audio` entries play on the comp timeline: `asset`, `start`, `sourceStart`, `duration`, `volume`,
+`fadeIn`, `fadeOut`. Unmuted `video` layers add their own sound automatically.
+
+- `volume` can be keyframed like any value (times from the clip's start): a swell, a dip under a line.
+- `scene` (id or index) makes `start` relative to that scene's start, so cues follow the edit when
+  scene durations change: `{ "sfx": "whoosh", "scene": "demo", "start": 0 }` hits on that cut.
+- `role`: `music` (default for assets), `voice` or `sfx`. Music ducks under voice clips automatically.
+- `sfx` plays a built-in sound effect instead of an asset, synthesized in code (no files, no licenses):
+  `whoosh` and `riser` (stretch them with `duration`), `impact`, `click`, `pop`, `tick`, `sparkle`.
+  `start` is when the sound *hits*: the middle of the whoosh, the end of the riser, the attack of the
+  rest. So put it exactly on the cut or the beat; the effect starts early on its own.
+
+`mix` sets the final mix:
+
+- `loudness` (default `-14`): integrated loudness target in LUFS, what Instagram, TikTok, YouTube and
+  Spotify play at, with peaks kept under -1 dBFS. The CLI uses ffmpeg's two-pass `loudnorm`, the
+  browser export a gain to the same target. `false` leaves levels as mixed.
+- `duck` (on when a `voice` clip exists): `amount` (dB, default -12), `attack` (0.12 s), `release`
+  (0.45 s), `threshold` (-45 dBFS). The music dips while someone speaks, holds through short pauses,
+  and is already down when the first word lands. `false` turns it off.
 
 ## Built-in fonts
 
@@ -152,5 +192,14 @@ What makes these videos look designed rather than generated:
   springs for playful objects. Keep a slow drift (scale 1.04 → 1, blurred glows moving) so frames never freeze.
 - **Restrained palette**: one background family, one accent color, neutrals for the rest.
 - **Depth**: blurred ellipses as light, soft `shadow`s on cards, `grain` 0.03–0.05 and `vignette` 0.25–0.35.
-- **Transitions with intent**: `push` for "next", `zoom` for "going deeper", `blur`/`fade` for endings.
+- **Transitions with intent**: `curve` for "next", `zoomThrough` for "going deeper", `flash` on a beat,
+  `blur`/`fade` for endings. Keep one direction for a whole video (every `curve` going `left`): the
+  story moves forward, and alternating directions reads as noise.
+- **Hold, don't drift, on the scenes around a curve**: the transition carries the motion, so a scene
+  that also slides makes the cut feel mushy.
+- **Sound on the cut**: a `whoosh` on moving transitions, an `impact` on the hit, a `riser` into a
+  reveal, `pop`/`click` for UI. Keep effects under the music and the voice (volume 0.4–0.8).
+- **Captions on anything with a voice**: most social video plays muted. 1–3 words per page,
+  uppercase, heavy weight, in the lower third but above the platform buttons.
+- `--srt` writes the captions as a sidecar `.srt` (upload it as closed captions too).
 - Check with `--contact 24` before the full render; look for overlaps, cut-off text and empty frames.
