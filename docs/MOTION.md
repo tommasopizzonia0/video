@@ -239,6 +239,31 @@ helps transcription (Whisper does slightly worse on cleaned sound), so run `npm 
 on the original sound. Listen to the result: a recording made close to the mouth in a quiet room
 still beats any cleanup.
 
+## Finding photos
+
+`npm run photos -- "olive tree in pot" --orient tall -n 12` searches free archives, keeps only
+pictures whose licence allows a paid ad with an edited picture, downloads the best (at most 2560 px,
+real size checked), and writes in `foto/<search>/`:
+
+- `01-pexels.jpg`, `02-openverse.jpg`, …, best first (no credit needed, then larger);
+- `provini.jpg`: a numbered contact sheet to choose from;
+- `CREDITI.txt` and `crediti.json`: author, licence and page of each photo, and which ones must be
+  credited in the ad (CC BY).
+
+Licences kept: CC0, public domain, Pexels, Pixabay (no credit), CC BY (credit). Left out:
+non-commercial (NC), no-derivatives (ND) and, unless `--sa`, share-alike (CC BY-SA). Options:
+`--min <px>` (shortest side, default 1080), `--orient tall|wide|square`, `--sources`, `-o <dir>`.
+Search in English: the archives are tagged mostly in English.
+
+Sources: Pexels (`PEXELS_API_KEY`, free from pexels.com/api, the best photos for ads), Pixabay
+(`PIXABAY_API_KEY`, free; downloads up to 1280 px), Openverse and Wikimedia Commons (no key). In the
+cloud, Wikimedia and Flickr often answer "too many requests" because the address is shared: try
+again later or from your computer.
+
+A licence covers the photographer's copyright, not recognizable people or trademarks in the
+picture: an ad needs their consent, so prefer photos without faces and logos. Wikimedia's
+`personality` and `trademarked` warnings end up in `CREDITI.txt`.
+
 ## Color grade
 
 `grade` on the comp colors the whole picture (the scenes; the top-level `layers`, such as captions and

@@ -29,6 +29,7 @@ npm run render -- examples/launch.json --contact 24 # un'immagine con 24 fotogra
 npm run render -- examples/launch.json --check      # controllo prima della consegna: safe zone, leggibilità, gancio, file
 npm run transcribe -- voce.mp3                       # sottotitoli: le parole con i tempi, da Whisper (pip install faster-whisper)
 npm run prep -- clip.mp4 --stabilize --denoise      # clip girate: stabilizza, toglie fruscio e ronzio
+npm run photos -- "olive tree" --orient tall           # foto dal web con licenza per pubblicità, provini e crediti
 npm run beats -- musica.mp3                          # i beat della musica, per tagliare a tempo
 ```
 

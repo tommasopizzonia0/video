@@ -33,6 +33,9 @@ asset; read the "parole incerte" it lists and fix them in the JSON before render
 Footage: run `npm run prep -- clip.mp4` on every shot first and apply what it suggests
 (`--stabilize`, `--denoise` for voice (DeepFilterNet; `--keep 20` if it sounds too dry), `--denoise fft` for ambience or music, `--hum`); tell the user what it cannot fix instead of hiding it.
 
+Photos the user did not supply: `npm run photos -- "<english search>" --orient tall`, look at
+`provini.jpg`, use only those, and pass `CREDITI.txt` on to the user (CC BY photos must be credited).
+
 Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
 `beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.
 If the confidence it prints is under 0.5, cut by ear instead.
