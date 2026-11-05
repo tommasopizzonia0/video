@@ -239,30 +239,44 @@ helps transcription (Whisper does slightly worse on cleaned sound), so run `npm 
 on the original sound. Listen to the result: a recording made close to the mouth in a quiet room
 still beats any cleanup.
 
-## Finding photos
+## Finding photos and stock video
 
 `npm run photos -- "olive tree in pot" --orient tall -n 12` searches free archives, keeps only
-pictures whose licence allows a paid ad with an edited picture, downloads the best (at most 2560 px,
-real size checked), and writes in `foto/<search>/`:
+files whose licence allows a paid ad with an edited picture, downloads the best (pictures at most
+2560 px, real size checked), and writes in `foto/<search>/`:
 
 - `01-pexels.jpg`, `02-openverse.jpg`, …, best first (no credit needed, then larger);
-- `provini.jpg`: a numbered contact sheet to choose from;
-- `CREDITI.txt` and `crediti.json`: author, licence and page of each photo, and which ones must be
+- `provini.jpg`: a numbered contact sheet to choose from (for videos, the frame at 1 s);
+- `CREDITI.txt` and `crediti.json`: author, licence and page of each file, and which ones must be
   credited in the ad (CC BY).
 
+Options:
+
+- `--video`: video clips from Pexels (up to 4K) and Pixabay (up to Full HD), saved as `.mp4`;
+  `--max-duration <s>` drops longer clips; `-n` defaults to 6.
+- `--kind photo|illustration|vector`: illustrations from Pixabay and Openverse, vectors (as
+  pictures) from Pixabay.
+- `--min <px>` shortest side (default 1080), `--orient tall|wide|square`, `--sources`, `-o <dir>`.
+- `--lang it`: search words in Italian for Pixabay and Pexels; Openverse and Wikimedia are tagged
+  mostly in English, so search in English to use all sources.
+
 Licences kept: CC0, public domain, Pexels, Pixabay (no credit), CC BY (credit). Left out:
-non-commercial (NC), no-derivatives (ND) and, unless `--sa`, share-alike (CC BY-SA). Options:
-`--min <px>` (shortest side, default 1080), `--orient tall|wide|square`, `--sources`, `-o <dir>`.
-Search in English: the archives are tagged mostly in English.
+non-commercial (NC), no-derivatives (ND) and, unless `--sa`, share-alike (CC BY-SA).
 
-Sources: Pexels (`PEXELS_API_KEY`, free from pexels.com/api, the best photos for ads), Pixabay
-(`PIXABAY_API_KEY`, free; downloads up to 1280 px), Openverse and Wikimedia Commons (no key). In the
-cloud, Wikimedia and Flickr often answer "too many requests" because the address is shared: try
-again later or from your computer.
+Sources and keys: Pexels (`PEXELS_API_KEY`, free from pexels.com/api: the best photos and videos
+for ads), Pixabay (`PIXABAY_API_KEY`, free; pictures up to 1280 px on the long side unless Pixabay
+grants the account full API access, then the original is used automatically), Openverse and
+Wikimedia Commons (no key). Openverse lists files hosted on many sites; the ones the network does
+not reach are skipped. In the cloud, Wikimedia and Flickr often answer "too many requests" because
+the address is shared: try again later or from your computer. Pixabay asks for no mass downloads:
+search for what the spot needs.
 
-A licence covers the photographer's copyright, not recognizable people or trademarks in the
-picture: an ad needs their consent, so prefer photos without faces and logos. Wikimedia's
-`personality` and `trademarked` warnings end up in `CREDITI.txt`.
+Not available through any API: Pixabay music, sound effects, GIFs and 3D models (download them by
+hand from the site; 3D models would also need a 3D renderer, which the engine does not have).
+
+A licence covers the copyright of the file, not recognizable people or trademarks in it: an ad
+needs their consent, so prefer pictures without faces and logos. Wikimedia's `personality` and
+`trademarked` warnings end up in `CREDITI.txt`.
 
 ## Color grade
 

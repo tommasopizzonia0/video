@@ -6,6 +6,10 @@ export type Licence = 'cc0' | 'pdm' | 'by' | 'by-sa' | 'pexels' | 'pixabay' | 'o
 export interface Photo {
   /** Source and id, e.g. "openverse:1c7d…". */
   id: string
+  /** Still picture (default) or video clip. */
+  kind?: 'image' | 'video'
+  /** Seconds, for videos. */
+  duration?: number
   source: 'openverse' | 'wikimedia' | 'pexels' | 'pixabay'
   title: string
   /** Full-size image. */
@@ -32,6 +36,8 @@ export interface PhotoFilter {
   orientation?: 'tall' | 'wide' | 'square'
   /** Accept CC BY-SA (share-alike: the edited ad picture should carry the same licence). */
   shareAlike?: boolean
+  /** Videos: longest clip in seconds. */
+  maxDuration?: number
 }
 
 const CC_NAMES: Record<string, Licence> = { cc0: 'cc0', pdm: 'pdm', by: 'by', 'by-sa': 'by-sa' }
@@ -132,16 +138,21 @@ export function fromPexels(json: { photos?: Record<string, unknown>[] }): Photo[
   })
 }
 
-/** Pixabay API response. `largeImageURL` is at most 1280 px on its long side without full API access. */
+/**
+ * Pixabay API response. Without full API access the largest file is `largeImageURL`, at most 1280 px
+ * on its long side; with it, `imageURL` is the original and `fullHDURL` 1920 px.
+ */
 export function fromPixabay(json: { hits?: Record<string, unknown>[] }): Photo[] {
   return (json.hits ?? []).map((r) => {
+    const long = Math.max(Number(r.imageWidth) || 1, Number(r.imageHeight) || 1)
+    const [url, cap] = r.imageURL ? [r.imageURL, Infinity] : r.fullHDURL ? [r.fullHDURL, 1920] : [r.largeImageURL, 1280]
     // The downloadable size, not the original's.
-    const scale = Math.min(1, 1280 / Math.max(Number(r.imageWidth) || 1, Number(r.imageHeight) || 1))
+    const scale = Math.min(1, cap / long)
     return {
       id: `pixabay:${r.id}`,
       source: 'pixabay' as const,
       title: String(r.tags ?? ''),
-      url: String(r.largeImageURL),
+      url: String(url),
       thumb: String(r.webformatURL ?? r.previewURL ?? r.largeImageURL),
       width: Math.round((Number(r.imageWidth) || 0) * scale),
       height: Math.round((Number(r.imageHeight) || 0) * scale),
@@ -153,6 +164,71 @@ export function fromPixabay(json: { hits?: Record<string, unknown>[] }): Photo[]
       restrictions: [],
     }
   })
+}
+
+/** The largest MP4 of a video that is not over 4K, or undefined. */
+function bestFile<T extends { width: number; height: number; url: string }>(files: T[]): T | undefined {
+  return files.filter((f) => f.url && f.width > 0 && Math.max(f.width, f.height) <= 3840).sort((a, b) => b.width * b.height - a.width * a.height)[0]
+}
+
+/** Pexels API `/videos/search` response. */
+export function fromPexelsVideos(json: { videos?: Record<string, unknown>[] }): Photo[] {
+  const out: Photo[] = []
+  for (const r of json.videos ?? []) {
+    const files = ((r.video_files ?? []) as Record<string, unknown>[])
+      .filter((f) => f.file_type === 'video/mp4')
+      .map((f) => ({ url: String(f.link ?? ''), width: Number(f.width) || 0, height: Number(f.height) || 0 }))
+    const f = bestFile(files)
+    if (!f) continue
+    const user = (r.user ?? {}) as Record<string, string>
+    out.push({
+      id: `pexels:${r.id}`,
+      kind: 'video',
+      duration: Number(r.duration) || 0,
+      source: 'pexels',
+      title: String(r.url ?? '').replace(/^.*\/video\/|-\d+\/?$/g, '').replace(/-/g, ' '),
+      url: f.url,
+      thumb: String(r.image ?? ''),
+      width: f.width,
+      height: f.height,
+      licence: 'pexels',
+      licenceName: 'Pexels License',
+      licenceUrl: 'https://www.pexels.com/license/',
+      creator: user.name ?? '',
+      creatorUrl: user.url,
+      page: String(r.url ?? ''),
+      restrictions: [],
+    })
+  }
+  return out
+}
+
+/** Pixabay API `/api/videos/` response. */
+export function fromPixabayVideos(json: { hits?: Record<string, unknown>[] }): Photo[] {
+  const out: Photo[] = []
+  for (const r of json.hits ?? []) {
+    const sizes = Object.values((r.videos ?? {}) as Record<string, { url: string; width: number; height: number; thumbnail?: string }>)
+    const f = bestFile(sizes)
+    if (!f) continue
+    out.push({
+      id: `pixabay:${r.id}`,
+      kind: 'video',
+      duration: Number(r.duration) || 0,
+      source: 'pixabay',
+      title: String(r.tags ?? ''),
+      url: f.url,
+      thumb: f.thumbnail ?? '',
+      width: f.width,
+      height: f.height,
+      licence: 'pixabay',
+      licenceName: 'Pixabay Content License',
+      licenceUrl: 'https://pixabay.com/service/license-summary/',
+      creator: String(r.user ?? ''),
+      page: String(r.pageURL ?? ''),
+      restrictions: [],
+    })
+  }
+  return out
 }
 
 /** Whether the licence allows a paid ad with an edited picture; `credit` when the author must be named. */
@@ -186,6 +262,7 @@ export function choosePhotos(photos: Photo[], f: PhotoFilter = {}): Photo[] {
     if (f.orientation === 'tall' && r > 0.9) return false
     if (f.orientation === 'wide' && r < 1.1) return false
     if (f.orientation === 'square' && (r < 0.8 || r > 1.25)) return false
+    if (f.maxDuration && p.duration && p.duration > f.maxDuration) return false
     seen.add(p.url)
     return true
   })
