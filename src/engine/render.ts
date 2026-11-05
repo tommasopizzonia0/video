@@ -15,11 +15,13 @@ import {
 import { activeScenes, compDuration, layerWindow } from './timeline'
 import { shapedTransition, type Pose } from './transitions'
 import { captionPages, pageAt, type CaptionPage } from './captions'
+import { applyLutCpu, bakeGrade, isIdentityGrade, LutPass, type Lut } from './grade'
 import type {
   CaptionWord,
   CaptionsLayer,
   Composition,
   Fill,
+  Grade,
   GroupLayer,
   GroupMask,
   ImageLayer,
@@ -50,6 +52,8 @@ export interface Resources {
   pathLength(d: string): number
   /** Word timings of a "captions" asset. */
   captions?(asset: string): CaptionWord[] | null
+  /** A parsed "lut" asset. */
+  lut?(asset: string): Lut | null
 }
 
 export interface VideoRequest {
@@ -126,6 +130,8 @@ interface Env {
   px: number
   /** When set, every text and caption drawn records where it landed (for the delivery checks). */
   probe?: DrawnText[]
+  /** Grades a canvas in place. */
+  grade: (canvas: AnyCanvas, grade: Grade) => void
 }
 
 /** A text as drawn: its four corners in comp px, its font size and opacity. */
@@ -189,6 +195,20 @@ export class Renderer {
   private grain: AnyCanvas[] | null = null
   /** Set to an array to collect where texts are drawn on the next `draw` calls (delivery checks). */
   probe: DrawnText[] | null = null
+  private lutPass: LutPass | null | undefined
+  private baked = new WeakMap<Grade, Lut | null>()
+  /** Grades a canvas in place: the grade is baked once into a LUT, applied on the GPU when possible. */
+  private readonly gradeCanvas = (canvas: AnyCanvas, grade: Grade) => {
+    let lut = this.baked.get(grade)
+    if (lut === undefined) {
+      lut = isIdentityGrade(grade) ? null : bakeGrade(grade, grade.lut ? (this.res.lut?.(grade.lut) ?? null) : null)
+      this.baked.set(grade, lut)
+    }
+    if (!lut) return
+    if (this.lutPass === undefined) this.lutPass = LutPass.create()
+    if (this.lutPass) this.lutPass.apply(canvas, lut)
+    else applyLutCpu(canvas, lut)
+  }
 
   constructor(canvas: AnyCanvas, comp: Composition, res: Resources, options: RenderOptions = {}) {
     this.comp = comp
@@ -220,23 +240,44 @@ export class Renderer {
       this.drawInto(this.ctx, t)
     } else {
       // Running average of the sub-frames: sample i weighs 1/(i+1).
+      // With a grade, the scenes are averaged first and graded once (grading is the costly part),
+      // then the overlay is drawn on top at the frame's own time.
+      const graded = !!this.comp.grade
       const { canvas, ctx } = this.pool.take()
       this.ctx.setTransform(1, 0, 0, 1, 0, 0)
       times.forEach((st, i) => {
         ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.clearRect(0, 0, this.width, this.height)
-        this.drawInto(ctx, st, false)
+        this.drawInto(ctx, st, false, graded ? 'scenes' : 'all')
         this.ctx.globalAlpha = 1 / (i + 1)
         this.ctx.drawImage(canvas, 0, 0)
       })
       this.ctx.globalAlpha = 1
       this.pool.give(canvas)
+      if (graded) {
+        this.gradeCanvas(this.ctx.canvas, this.comp.grade!)
+        this.drawOverlay(this.ctx, t)
+      }
       this.drawEffects(this.ctx, t)
     }
   }
 
-  private drawInto(ctx: Ctx2D, t: number, effects = true) {
-    const env: Env = { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined }
+  private env(ctx: Ctx2D): Env {
+    return { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined, grade: this.gradeCanvas }
+  }
+
+  /** The top-level layers (captions, logo), above the graded scenes. */
+  private drawOverlay(ctx: Ctx2D, t: number) {
+    ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
+    ctx.globalAlpha = 1
+    ctx.filter = 'none'
+    ctx.globalCompositeOperation = 'source-over'
+    drawLayers(this.env(ctx), this.comp.layers ?? [], t, this.comp.width, this.comp.height, this.duration)
+  }
+
+  /** `pass`: everything, or only the scenes (graded, without the overlay; see `draw`). */
+  private drawInto(ctx: Ctx2D, t: number, effects = true, pass: 'all' | 'scenes' = 'all') {
+    const env = this.env(ctx)
     ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
     ctx.globalAlpha = 1
     ctx.filter = 'none'
@@ -256,6 +297,9 @@ export class Renderer {
       if (a) this.pool.give(a.canvas)
       this.pool.give(b.canvas)
     }
+    if (pass === 'scenes') return
+    // The comp's grade covers the scenes; the overlay above them (captions, logo) keeps its colors.
+    if (this.comp.grade) this.gradeCanvas(ctx.canvas, this.comp.grade)
     drawLayers(env, this.comp.layers ?? [], t, env.W, env.H, this.duration)
     if (effects) this.drawEffects(ctx, t)
   }
@@ -263,7 +307,7 @@ export class Renderer {
   private offscreen(draw: (env: Env) => void) {
     const off = this.pool.take()
     off.ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
-    draw({ ctx: off.ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined })
+    draw(this.env(off.ctx))
     return off
   }
 
@@ -614,6 +658,7 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   const isolate =
     heavyBlur ||
     !!layer.shadow ||
+    !!layer.grade ||
     (layer.type === 'group' && (opacity < 1 || fullFilter !== 'none' || (!!layer.blend && layer.blend !== 'normal')))
 
   const outer = env.ctx
@@ -650,6 +695,7 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   drawContent(e, layer, lt, win.duration, bw, bh)
 
   if (off) {
+    if (layer.grade) env.grade(off.canvas, layer.grade)
     let source = off.canvas
     let blurred: ReturnType<CanvasPool['take']> | null = null
     if (heavyBlur) {

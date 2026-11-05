@@ -27,6 +27,9 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
 6. Deliver the MP4 plus a poster frame (`--still`), and keep the JSON so the video can be edited
    later in the browser (Motion view, `#motion`).
 
+Color: give footage from different sources a per-layer `grade` so they match, then one comp `grade`
+for the look (subtle: contrast 1.1–1.2, saturation 1.05–1.15, warm highlights or a LUT at 60–80%).
+
 Design rules that matter most: one accent color and one accent serif word per headline; headlines enter
 with `maskUp` by word, secondary text later with `fadeUp`; ease out (`smooth`, `outExpo`), never linear
 arrivals; slow background drift so no frame is static; `grain` ~0.04 and `vignette` ~0.3 for finish;

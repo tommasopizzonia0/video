@@ -199,6 +199,41 @@ Only one scene is on screen at any frame, never a dissolve. Their curves are bui
 - `flash` (0.34 s): a hard cut hidden in a flash of `color` (white by default), for beats and drops.
 - `whip` (0.36 s): a fast pan well past the screen with a directional smear.
 
+## Color grade
+
+`grade` on the comp colors the whole picture (the scenes; the top-level `layers`, such as captions and
+a logo, keep their colors). `grade` on a layer colors that layer alone: use it to match footage from
+different cameras before the overall look.
+
+```jsonc
+"assets": { "look": { "type": "lut", "src": "looks/caldo-pellicola.cube" } },
+"grade": {
+  "exposure": 0.15,          // stops: +1 doubles the light
+  "temperature": 0.2,        // -1 cool .. 1 warm
+  "tint": 0,                 // -1 green .. 1 magenta
+  "saturation": 1.1,         // 0 = black and white
+  "contrast": 1.15,          // S-curve around mid grey; black and white stay put, nothing clips
+  "shadows": [0, 0.03, 0.1], // lift: a number, or [r, g, b] to tint the shadows (here: teal)
+  "midtones": 0,             // gamma
+  "highlights": [0.05, 0.02, 0],  // gain: warm highlights
+  "fade": 0.1,               // matte, lifted blacks
+  "lut": "look", "lutAmount": 0.8  // a 3D .cube LUT after the corrections, mixed at 80%
+}
+```
+
+Exposure, white balance and saturation work in linear light; the rest on the display image. The
+whole grade is baked into one 33³ LUT and applied on the GPU (WebGL2), with a CPU fallback, so the
+preview and the render match. `.cube` files from Resolve, Premiere or a LUT pack work as they are
+(3D, input range 0..1). `examples/looks/caldo-pellicola.cube` is a starting look made for this
+project (cool shadows, warm highlights, soft S-curve).
+
+Cost: on a computer with a graphics card it is negligible; in a cloud container without one
+(software WebGL) the render runs at about 60% of its speed. With motion blur the scenes are
+graded once per frame, not once per sub-frame.
+
+What a grade can't do: recover detail that is clipped white or crushed black in the footage,
+or fix mixed light (a face lit by a window and a lamp) — that is done on set.
+
 ## Audio
 
 `audio` entries play on the comp timeline: `asset`, `start`, `sourceStart`, `duration`, `volume`,

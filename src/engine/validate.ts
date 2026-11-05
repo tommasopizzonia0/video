@@ -27,7 +27,7 @@ export const BUILTIN_FONTS = [
 const common = [
   'type', 'id', 'comment', 'hidden', 'start', 'duration', 'x', 'y', 'anchor', 'scale', 'scaleX', 'scaleY',
   'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast', 'saturate', 'grayscale', 'hueRotate',
-  'shadow', 'blend', 'in', 'out',
+  'shadow', 'blend', 'grade', 'in', 'out',
 ]
 const layerKeys: Record<string, string[]> = {
   rect: ['width', 'height', 'radius', 'fill', 'stroke'],
@@ -49,7 +49,7 @@ const animatable = new Set([
   'x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast',
   'saturate', 'grayscale', 'hueRotate', 'width', 'height', 'radius', 'trimStart', 'trimEnd',
 ])
-const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects']
+const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects', 'grade']
 export const PLATFORM_IDS = ['reels', 'tiktok', 'feed', 'youtube']
 const sceneKeys = ['id', 'comment', 'duration', 'background', 'layers', 'transition']
 const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
@@ -141,6 +141,27 @@ export function validate(input: unknown): Issue[] {
     warn('duration', 'Without scenes, set "duration" explicitly.')
 
   const assets = isObj(comp.assets) ? comp.assets : {}
+  const gradeKeys = ['exposure', 'temperature', 'tint', 'saturation', 'contrast', 'shadows', 'midtones', 'highlights', 'fade', 'lut', 'lutAmount']
+  const checkGrade = (g: unknown, path: string) => {
+    if (g === undefined) return
+    if (!isObj(g)) return err(path, `Must be { ${gradeKeys.join(', ')} }.`)
+    keys(g, gradeKeys, path)
+    const ranges: Record<string, [number, number]> = { exposure: [-4, 4], temperature: [-1, 1], tint: [-1, 1], saturation: [0, 3], contrast: [0.2, 3], fade: [0, 1], lutAmount: [0, 1] }
+    for (const [k, [lo, hi]] of Object.entries(ranges)) {
+      const v = g[k]
+      if (v !== undefined && (!isNum(v) || v < lo || v > hi)) err(`${path}.${k}`, `Must be a number from ${lo} to ${hi}.`)
+    }
+    for (const k of ['shadows', 'midtones', 'highlights']) {
+      const v = g[k]
+      const ok = (x: unknown) => isNum(x) && x >= -1 && x <= 1
+      if (v !== undefined && !(ok(v) || (Array.isArray(v) && v.length === 3 && v.every(ok)))) err(`${path}.${k}`, 'Must be a number from -1 to 1, or [r, g, b] of such numbers.')
+    }
+    if (g.lut !== undefined) {
+      const a = assets[g.lut as string] as { type?: string } | undefined
+      if (!a) err(`${path}.lut`, `No asset "${String(g.lut)}". Declare it in "assets" as { "type": "lut", "src": "look.cube" }.`)
+      else if (a.type !== 'lut') err(`${path}.lut`, `Asset "${String(g.lut)}" is not a "lut".`)
+    }
+  }
   if (comp.assets !== undefined && !isObj(comp.assets)) err('assets', 'Must be an object of { id: { type, src } }.')
   for (const [id, a] of Object.entries(assets)) {
     const p = `assets.${id}`
@@ -148,7 +169,8 @@ export function validate(input: unknown): Issue[] {
       err(p, 'Must be { "type": "image" | "video" | "audio", "src": "..." }.')
       continue
     }
-    if (!['image', 'video', 'audio', 'captions'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio" or "captions".')
+    if (!['image', 'video', 'audio', 'captions', 'lut'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio", "captions" or "lut".')
+    else if (a.type === 'lut' && typeof a.src === 'string' && !/\.cube$/i.test(a.src)) warn(`${p}.src`, 'LUTs are read as .cube files.')
     if (typeof a.src !== 'string' || !a.src) err(`${p}.src`, 'Must be a path relative to the composition file, or a URL.')
   }
 
@@ -255,6 +277,7 @@ export function validate(input: unknown): Issue[] {
     if (l.blend !== undefined && !blendModes.includes(l.blend as string)) err(`${path}.blend`, `Unknown blend mode.${suggest(String(l.blend), blendModes)}`)
     checkPreset(l.in, `${path}.in`)
     checkPreset(l.out, `${path}.out`)
+    checkGrade(l.grade, `${path}.grade`)
     if (l.shadow !== undefined) {
       if (!isObj(l.shadow)) err(`${path}.shadow`, 'Must be { color, blur, x, y }.')
       else if (l.shadow.color !== undefined) checkColor(l.shadow.color, `${path}.shadow.color`)
@@ -400,6 +423,7 @@ export function validate(input: unknown): Issue[] {
       }
     }
   }
+  checkGrade(comp.grade, 'grade')
   if (comp.effects !== undefined) {
     if (!isObj(comp.effects)) err('effects', 'Must be { grain?, vignette?, motionBlur? }.')
     else keys(comp.effects, ['grain', 'vignette', 'motionBlur'], 'effects')

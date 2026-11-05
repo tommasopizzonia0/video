@@ -3,6 +3,7 @@
 import { ALL_FORMATS, BlobSource, CanvasSink, Input, UrlSource, type WrappedCanvas } from 'mediabunny'
 import { audioMix } from './audio'
 import { wordsFromJson, wordsFromSrt } from './captions'
+import { parseCube, type Lut } from './grade'
 import { BUILTIN_FONT_FILES } from './fonts'
 import type { Drawable, Resources, VideoRequest } from './render'
 import { DEFAULT_FONT } from './text'
@@ -117,6 +118,7 @@ export class BrowserResources implements Resources {
   private frames = new Map<string, Drawable>()
   private lengths = new Map<string, number>()
   private words = new Map<string, CaptionWord[]>()
+  private luts = new Map<string, Lut>()
   private comp: Composition
   private resolve: Resolver
 
@@ -143,6 +145,10 @@ export class BrowserResources implements Resources {
         if (asset.type === 'image') res.images.set(id, await loadImage(resolve(asset.src)))
         if (asset.type === 'video') res.videos.set(id, await res.openVideo(resolve(asset.src)))
         if (asset.type === 'captions') res.words.set(id, await loadWords(resolve(asset.src), asset.src))
+        if (asset.type === 'lut') {
+          const src = resolve(asset.src)
+          res.luts.set(id, parseCube(typeof src === 'string' ? await (await fetch(src)).text() : await src.text()))
+        }
       } catch (e) {
         throw new Error(`Asset "${id}" (${asset.src}): ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -185,6 +191,10 @@ export class BrowserResources implements Resources {
 
   videoFrame(asset: string, time: number): Drawable | null {
     return this.frames.get(`${asset}|${time}`) ?? null
+  }
+
+  lut(asset: string): Lut | null {
+    return this.luts.get(asset) ?? null
   }
 
   captions(asset: string): CaptionWord[] | null {
