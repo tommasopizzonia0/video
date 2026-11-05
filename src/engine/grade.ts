@@ -244,6 +244,9 @@ export class LutPass {
     gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
     for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE)
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    // apply() turns premultiplication on for the picture; with it on, uploading raw float data fails
+    // (INVALID_OPERATION), which left every LUT after the first empty: black layers.
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
     gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGB16F, lut.size, lut.size, lut.size, 0, gl.RGB, gl.FLOAT, lut.data)
     this.luts.set(lut, tex)
     return tex

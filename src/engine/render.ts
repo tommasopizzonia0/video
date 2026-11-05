@@ -928,6 +928,14 @@ function applyMask(ctx: Ctx2D, m: GroupMask, lt: number, bw: number, bh: number)
   ctx.translate(num(m.x, lt, bw / 2), num(m.y, lt, bh / 2))
   ctx.rotate((num(m.rotation, lt, 0) * Math.PI) / 180)
   const s = num(m.scale, lt, 1)
+  if (Math.abs(s) < 1e-6) {
+    // A mask shrunk to nothing hides everything (a zero scale would make the canvas skip the clip).
+    ctx.setTransform(before)
+    ctx.beginPath()
+    ctx.rect(0, 0, 0, 0)
+    ctx.clip()
+    return
+  }
   ctx.scale(s, s)
   ctx.translate(-mw / 2, -mh / 2)
   ctx.scale(mw / vw, mh / vh)
