@@ -261,6 +261,32 @@ or fix mixed light (a face lit by a window and a lamp) — that is done on set.
   (0.45 s), `threshold` (-45 dBFS). The music dips while someone speaks, holds through short pauses,
   and is already down when the first word lands. `false` turns it off.
 
+## Cutting on the music
+
+`npm run beats -- music.mp3` writes `music.beats.json` next to the file and prints the tempo, how
+reliable it is, the bar starts and the *stacchi forti* (beats where the music jumps up by 6 dB or
+more: a drop, a new section, the place for the big cut). Load it as a `beats` asset and point
+`beats` at it:
+
+```json
+"assets": { "musica": { "type": "audio", "src": "music.mp3" }, "grid": { "type": "beats", "src": "music.beats.json" } },
+"beats": { "asset": "grid" },
+"audio": [ { "asset": "musica" }, { "sfx": "impact", "beat": 8 } ],
+"scenes": [ { "beats": 8, "layers": [] }, { "beats": 4, "transition": { "type": "curve" }, "layers": [] } ]
+```
+
+- Scene `beats: n` replaces `duration`: the next cut lands n beats after this scene's cut. The cut is
+  the middle of the transition (where the new picture takes over), so a transition straddles the beat.
+- Audio `beat: n` plays the clip on beat n (0 = the first beat of the file) instead of `start`.
+- `beats.offset`: comp time where the music starts, when it does not start at 0.
+- Past the last analysed beat the grid continues at the average spacing.
+- `--check` warns about every cut more than one frame off the beat.
+
+Limits: the tracker assumes a steady pulse. With rubato, ambient pads or tempo changes the confidence
+drops (under ~0.5 the beats are guesses): listen, and set `duration` by hand there. Bar starts assume
+4/4 and are an estimate. Measured on test tracks: mean error under 7 ms, worst 32 ms (one frame at
+30 fps is 33 ms).
+
 ## Built-in fonts
 
 `Inter` (default), `Inter Tight`, `Fraunces`, `Instrument Serif` (400, normal + italic),

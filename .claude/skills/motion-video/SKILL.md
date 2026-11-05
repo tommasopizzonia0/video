@@ -30,6 +30,10 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
 Voice: `npm run transcribe -- voce.mp3 [--prompt "brand names"]` → `voce.words.json` for a `captions`
 asset; read the "parole incerte" it lists and fix them in the JSON before rendering.
 
+Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
+`beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.
+If the confidence it prints is under 0.5, cut by ear instead.
+
 Color: give footage from different sources a per-layer `grade` so they match, then one comp `grade`
 for the look (subtle: contrast 1.1–1.2, saturation 1.05–1.15, warm highlights or a LUT at 60–80%).
 

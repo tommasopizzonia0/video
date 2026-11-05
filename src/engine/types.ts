@@ -422,7 +422,10 @@ export interface Transition {
 export interface Scene {
   id?: string
   comment?: string
+  /** Seconds. May be left out when `beats` sets it. */
   duration: number
+  /** Length in beats of the music (needs the comp's `beats`): the next cut lands on the beat. */
+  beats?: number
   background?: Fill
   layers: Layer[]
   /** How this scene enters, overlapping the end of the previous one. */
@@ -431,7 +434,7 @@ export interface Scene {
 
 export interface Asset {
   /** "lut": a 3D .cube LUT for `grade.lut`. "captions": word timings for a captions layer (Whisper JSON, a word list, SRT or VTT). */
-  type: 'image' | 'video' | 'audio' | 'captions' | 'lut'
+  type: 'image' | 'video' | 'audio' | 'captions' | 'lut' | 'beats'
   /** Path relative to the composition file, or a URL. */
   src: string
 }
@@ -456,6 +459,8 @@ export interface AudioClip {
   scene?: string | number
   /** Seconds: comp time, or time in `scene` when set. */
   start?: number
+  /** Starts on this beat of the music instead (0 = the first; needs the comp's `beats`). */
+  beat?: number
   /** Seconds into the source. */
   sourceStart?: number
   duration?: number
@@ -526,4 +531,6 @@ export interface Composition {
   effects?: Effects
   /** Color grade of the whole picture (before grain and vignette). */
   grade?: Grade
+  /** Beat times of the music (a "beats" asset from `npm run beats`), for scene `beats` and audio `beat`. */
+  beats?: { asset: string; offset?: number }
 }

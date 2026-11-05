@@ -259,6 +259,26 @@ export function checkFrames(facts: CompFacts, samples: FrameSample[], platform: 
   return sortFindings(out)
 }
 
+/** Cuts more than a frame away from the nearest beat, when the comp follows a beat grid. */
+export function checkCuts(cuts: number[], beats: number[], fps: number): Finding[] {
+  const out: Finding[] = []
+  if (!beats.length) return out
+  for (const c of cuts) {
+    let best = Infinity
+    for (const b of beats) if (Math.abs(b - c) < Math.abs(best)) best = b - c
+    // Past the last analysed beat the grid continues at the average spacing.
+    const n = beats.length
+    if (n > 1 && c > beats[n - 1]) {
+      const period = (beats[n - 1] - beats[0]) / (n - 1)
+      best = beats[n - 1] + Math.round((c - beats[n - 1]) / period) * period - c
+    }
+    if (Math.abs(best) > 1 / fps + 1e-6) {
+      out.push({ level: 'warning', at: c, message: `Il taglio a ${c.toFixed(2)} s è ${Math.round(Math.abs(best) * 1000)} ms ${best > 0 ? 'prima del' : 'dopo il'} beat: usa "beats" sulla scena per agganciarlo.` })
+    }
+  }
+  return out
+}
+
 /** What ffprobe and ffmpeg's ebur128 report about a rendered file. */
 export interface FileFacts {
   width: number

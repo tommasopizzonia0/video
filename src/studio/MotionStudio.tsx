@@ -10,6 +10,7 @@ import { sceneStarts } from '../engine/timeline'
 import type { Composition } from '../engine/types'
 import { parseComposition, type Issue } from '../engine/validate'
 import { applyVariant } from '../engine/variants'
+import { applyBeatGrid } from '../engine/beatgrid'
 import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type LiveUpdate } from './live'
 import { formatTime } from '../timeline'
 
@@ -129,10 +130,12 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
           void res.dispose()
           return
         }
-        const renderer = new Renderer(canvasRef.current!, comp, res, { scale: Math.min(1, 1280 / Math.max(comp.width, comp.height)) })
+        // Scene lengths in beats become seconds once the beat times are loaded.
+        const timed = comp.beats ? applyBeatGrid(comp, res.beats(comp.beats.asset) ?? []) : comp
+        const renderer = new Renderer(canvasRef.current!, timed, res, { scale: Math.min(1, 1280 / Math.max(comp.width, comp.height)) })
         setSession((prev) => {
           void prev?.res.dispose()
-          return { comp, res, renderer }
+          return { comp: timed, res, renderer }
         })
         setStatus(null)
       })

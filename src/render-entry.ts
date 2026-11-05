@@ -2,7 +2,7 @@
 // that the CLI drives through Playwright: load a composition, draw frames, export.
 
 import { audioMix } from './engine/audio'
-import { checkFile, checkFrames, contrastRatio, formatFindings, platformFor, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './engine/check'
+import { checkCuts, checkFile, checkFrames, contrastRatio, formatFindings, platformFor, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './engine/check'
 import { parseColor } from './engine/color'
 import { captionPages, pageText, toSrt } from './engine/captions'
 import { exportVideo, renderAudio } from './engine/export'
@@ -13,6 +13,7 @@ import { BrowserResources } from './engine/resources'
 import type { Composition } from './engine/types'
 import { validate } from './engine/validate'
 import { applyVariant } from './engine/variants'
+import { applyBeatGrid, sceneCuts } from './engine/beatgrid'
 
 interface Session {
   comp: Composition
@@ -50,6 +51,7 @@ const api = {
     await session?.res.dispose()
     const resolve = (src: string) => overrides[src] ?? new URL(src, base).href
     const res = await BrowserResources.load(comp, resolve)
+    if (comp.beats) comp = applyBeatGrid(comp, res.beats(comp.beats.asset) ?? [])
     const canvas = document.getElementById('stage') as HTMLCanvasElement
     const renderer = new Renderer(canvas, comp, res, { scale })
     session = { comp, res, renderer, canvas }
@@ -225,6 +227,10 @@ const api = {
       samples.push({ t, transition: scenes.length > 1 || scenes.some((a) => a.enter !== null && a.enter < 1), texts, spread, change })
     }
     const findings = checkFrames({ width: s.comp.width, height: s.comp.height, duration: s.renderer.duration }, samples, platform)
+    if (s.comp.beats) {
+      const beats = (s.res.beats(s.comp.beats.asset) ?? []).map((b) => b + (s.comp.beats!.offset ?? 0))
+      findings.push(...checkCuts(sceneCuts(s.comp), beats, s.renderer.fps))
+    }
     return { platform: platform.name, source: platform.source, lines: formatFindings(findings), errors: findings.filter((f) => f.level === 'error').length }
   },
 

@@ -49,9 +49,9 @@ const animatable = new Set([
   'x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast',
   'saturate', 'grayscale', 'hueRotate', 'width', 'height', 'radius', 'trimStart', 'trimEnd',
 ])
-const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects', 'grade']
+const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects', 'grade', 'beats']
 export const PLATFORM_IDS = ['reels', 'tiktok', 'feed', 'youtube']
-const sceneKeys = ['id', 'comment', 'duration', 'background', 'layers', 'transition']
+const sceneKeys = ['id', 'comment', 'duration', 'beats', 'background', 'layers', 'transition']
 const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
 const blendModes = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
@@ -169,7 +169,7 @@ export function validate(input: unknown): Issue[] {
       err(p, 'Must be { "type": "image" | "video" | "audio", "src": "..." }.')
       continue
     }
-    if (!['image', 'video', 'audio', 'captions', 'lut'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio", "captions" or "lut".')
+    if (!['image', 'video', 'audio', 'captions', 'lut', 'beats'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio", "captions", "lut" or "beats".')
     else if (a.type === 'lut' && typeof a.src === 'string' && !/\.cube$/i.test(a.src)) warn(`${p}.src`, 'LUTs are read as .cube files.')
     if (typeof a.src !== 'string' || !a.src) err(`${p}.src`, 'Must be a path relative to the composition file, or a URL.')
   }
@@ -365,7 +365,10 @@ export function validate(input: unknown): Issue[] {
         const p = `scenes[${i}]`
         if (!isObj(s)) return err(p, 'A scene is { "duration", "layers", ... }.')
         keys(s, sceneKeys, p)
-        if (!isNum(s.duration) || s.duration <= 0) err(`${p}.duration`, 'Must be a positive number of seconds.')
+        if (s.beats !== undefined) {
+          if (!Number.isInteger(s.beats) || (s.beats as number) <= 0) err(`${p}.beats`, 'Must be a whole number of beats (> 0).')
+          if (!comp.beats) err(`${p}.beats`, 'Needs "beats": { "asset": "..." } on the composition (from npm run beats).')
+        } else if (!isNum(s.duration) || s.duration <= 0) err(`${p}.duration`, 'Must be a positive number of seconds.')
         checkFill(s.background, `${p}.background`)
         checkLayers(s.layers ?? [], `${p}.layers`)
         const tr = s.transition
@@ -390,7 +393,11 @@ export function validate(input: unknown): Issue[] {
       comp.audio.forEach((a, i) => {
         const p = `audio[${i}]`
         if (!isObj(a)) return err(p, 'Must be { "asset": "...", ... }.')
-        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'beat', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        if (a.beat !== undefined) {
+          if (!Number.isInteger(a.beat) || (a.beat as number) < 0) err(`${p}.beat`, 'Must be a beat number (0 = the first).')
+          if (!comp.beats) err(`${p}.beat`, 'Needs "beats": { "asset": "..." } on the composition (from npm run beats).')
+        }
         if (a.sfx !== undefined) {
           if (!SFX_NAMES.includes(a.sfx as never)) err(`${p}.sfx`, `Unknown sound effect "${String(a.sfx)}".${suggest(String(a.sfx), SFX_NAMES)} Options: ${SFX_NAMES.join(', ')}.`)
           if (a.asset !== undefined) err(p, 'Use either "asset" or "sfx", not both.')
@@ -424,6 +431,17 @@ export function validate(input: unknown): Issue[] {
     }
   }
   checkGrade(comp.grade, 'grade')
+  if (comp.beats !== undefined) {
+    const b = comp.beats as unknown
+    if (!isObj(b) || typeof b.asset !== 'string') err('beats', 'Must be { "asset": "<a beats asset>", "offset"?: seconds }.')
+    else {
+      keys(b, ['asset', 'offset'], 'beats')
+      const a = assets[b.asset] as { type?: string } | undefined
+      if (!a) err('beats.asset', `No asset "${b.asset}". Declare it as { "type": "beats", "src": "music.beats.json" }.`)
+      else if (a.type !== 'beats') err('beats.asset', `Asset "${b.asset}" is not a "beats" asset.`)
+      if (b.offset !== undefined && !isNum(b.offset)) err('beats.offset', 'Must be seconds: the comp time where the music file starts.')
+    }
+  }
   if (comp.effects !== undefined) {
     if (!isObj(comp.effects)) err('effects', 'Must be { grain?, vignette?, motionBlur? }.')
     else keys(comp.effects, ['grain', 'vignette', 'motionBlur'], 'effects')

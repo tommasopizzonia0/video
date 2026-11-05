@@ -28,6 +28,7 @@ npm run render -- examples/launch.json              # crea examples/launch.mp4
 npm run render -- examples/launch.json --contact 24 # un'immagine con 24 fotogrammi, per controllare tutto il video
 npm run render -- examples/launch.json --check      # controllo prima della consegna: safe zone, leggibilità, gancio, file
 npm run transcribe -- voce.mp3                       # sottotitoli: le parole con i tempi, da Whisper (pip install faster-whisper)
+npm run beats -- musica.mp3                          # i beat della musica, per tagliare a tempo
 ```
 
 Serve [ffmpeg](https://ffmpeg.org) per l'MP4 migliore (senza, il video viene codificato nel browser).

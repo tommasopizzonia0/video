@@ -119,6 +119,7 @@ export class BrowserResources implements Resources {
   private lengths = new Map<string, number>()
   private words = new Map<string, CaptionWord[]>()
   private luts = new Map<string, Lut>()
+  private beatTimes = new Map<string, number[]>()
   private comp: Composition
   private resolve: Resolver
 
@@ -145,6 +146,13 @@ export class BrowserResources implements Resources {
         if (asset.type === 'image') res.images.set(id, await loadImage(resolve(asset.src)))
         if (asset.type === 'video') res.videos.set(id, await res.openVideo(resolve(asset.src)))
         if (asset.type === 'captions') res.words.set(id, await loadWords(resolve(asset.src), asset.src))
+        if (asset.type === 'beats') {
+          const src = resolve(asset.src)
+          const data = JSON.parse(typeof src === 'string' ? await (await fetch(src)).text() : await src.text())
+          const beats = Array.isArray(data) ? data : data?.beats
+          if (!Array.isArray(beats) || !beats.every((b: unknown) => typeof b === 'number')) throw new Error('expected { "beats": [seconds, ...] } (from npm run beats)')
+          res.beatTimes.set(id, beats)
+        }
         if (asset.type === 'lut') {
           const src = resolve(asset.src)
           res.luts.set(id, parseCube(typeof src === 'string' ? await (await fetch(src)).text() : await src.text()))
@@ -191,6 +199,10 @@ export class BrowserResources implements Resources {
 
   videoFrame(asset: string, time: number): Drawable | null {
     return this.frames.get(`${asset}|${time}`) ?? null
+  }
+
+  beats(asset: string): number[] | null {
+    return this.beatTimes.get(asset) ?? null
   }
 
   lut(asset: string): Lut | null {
