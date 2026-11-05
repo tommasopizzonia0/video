@@ -42,8 +42,10 @@ export async function renderAudio(comp: Composition, res: BrowserResources, dura
   if (!mix.length) return null
   const rate = 48000
   const ctx = new OfflineAudioContext(2, Math.max(1, Math.ceil(duration * rate)), rate)
-  const buffers = await res.audioBuffers(ctx, options.audioSrc)
+  const buffers = await res.audioBuffers(ctx, options.audioSrc, mix)
   if (!buffers.size && !mix.some((c) => c.sfx)) return null
+  // Say so instead of exporting a silent track (the CLI prints page errors).
+  for (const id of new Set(mix.flatMap((c) => (c.asset && c.role !== 'video' && !buffers.has(c.asset) ? [c.asset] : [])))) console.error(`audio "${id}" non decodificato: nel video sarà muto`)
   scheduleMix(ctx, mix, buffers, options.from ?? 0)
   const out = await ctx.startRendering()
   const target = comp.mix?.loudness ?? DEFAULT_LOUDNESS

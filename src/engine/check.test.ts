@@ -72,6 +72,12 @@ describe('delivery checks: frames', () => {
     expect(msg).not.toMatch(/"titolo"/)
   })
 
+  it('does not count a text that pops in as small text', () => {
+    // Scaled up from 60% over the first 0.2 s, then 80 px for the rest.
+    const pop = (t: number) => text('bottone', [300, 1000, 780, 1080], { size: t < 0.25 ? 30 : 80, alpha: t < 0.25 ? 0.8 : 1 })
+    expect(checkFrames(facts, samples(8, (t) => [centered, pop(t)]), PLATFORMS.reels)).toEqual([])
+  })
+
   it('finds empty frames, an empty first frame and a missing hook', () => {
     const s = samples(8, (t) => (t >= 3 ? [centered] : []), 40).map((x) => (x.t < 3 ? { ...x, spread: 0, change: 0 } : x))
     const msg = checkFrames(facts, s, PLATFORMS.reels).map((i) => i.message).join('\n')

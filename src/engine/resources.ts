@@ -1,7 +1,7 @@
 // Loads everything a composition needs in the browser: fonts, images, decoded video frames and audio.
 
 import { ALL_FORMATS, BlobSource, CanvasSink, Input, UrlSource, type WrappedCanvas } from 'mediabunny'
-import { audioMix } from './audio'
+import { audioMix, type MixClip } from './audio'
 import { wordsFromJson, wordsFromSrt } from './captions'
 import { parseCube, type Lut } from './grade'
 import { BUILTIN_FONT_FILES } from './fonts'
@@ -233,9 +233,13 @@ export class BrowserResources implements Resources {
    * Decoded audio for every asset the mix uses. Sources without sound are skipped. `audioSrc` can
    * point an asset at a different file for its sound (the CLI passes WAV copies Chromium can decode).
    */
-  async audioBuffers(ctx: BaseAudioContext, audioSrc: (src: string) => string | undefined = () => undefined): Promise<Map<string, AudioBuffer>> {
+  /**
+   * Decoded sound of the assets in `mix`. Pass the mix of the comp that will play: the comp these
+   * resources were loaded with may still have scene lengths in beats, so its own mix can be empty.
+   */
+  async audioBuffers(ctx: BaseAudioContext, audioSrc: (src: string) => string | undefined = () => undefined, mix: MixClip[] = audioMix(this.comp)): Promise<Map<string, AudioBuffer>> {
     const out = new Map<string, AudioBuffer>()
-    const ids = new Set(audioMix(this.comp).flatMap((c) => (c.asset ? [c.asset] : [])))
+    const ids = new Set(mix.flatMap((c) => (c.asset ? [c.asset] : [])))
     for (const id of ids) {
       const asset = this.comp.assets?.[id]
       if (!asset) continue

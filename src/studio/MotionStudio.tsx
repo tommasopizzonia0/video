@@ -235,9 +235,10 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     if (audioMix(session.comp).length) {
       const audio = new AudioContext()
       state.audio = audio
-      const buffers = await session.res.audioBuffers(audio)
+      const mix = audioMix(session.comp)
+      const buffers = await session.res.audioBuffers(audio, undefined, mix)
       if (playback.current !== state) return
-      state.sources = scheduleMix(audio, audioMix(session.comp), buffers, from)
+      state.sources = scheduleMix(audio, mix, buffers, from)
     }
     const started = performance.now()
     const tick = () => {

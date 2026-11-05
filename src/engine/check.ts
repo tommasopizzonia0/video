@@ -157,7 +157,7 @@ export function checkFrames(facts: CompFacts, samples: FrameSample[], platform: 
     visible: number
     outside: number
     firstOutside: number
-    minSize: number
+    sizes: number[]
     minContrast: number
     contrastAt: number
     words: number
@@ -169,13 +169,13 @@ export function checkFrames(facts: CompFacts, samples: FrameSample[], platform: 
       if (p.alpha < 0.5) continue
       let e = seen.get(p.key)
       if (!e) {
-        e = { label: p.label, kind: p.kind, visible: 0, outside: 0, firstOutside: -1, minSize: Infinity, minContrast: Infinity, contrastAt: 0, words: p.words, first: s.t }
+        e = { label: p.label, kind: p.kind, visible: 0, outside: 0, firstOutside: -1, sizes: [], minContrast: Infinity, contrastAt: 0, words: p.words, first: s.t }
         seen.set(p.key, e)
       }
       e.visible += step
       e.words = Math.max(e.words, p.words)
       if (s.transition) continue
-      e.minSize = Math.min(e.minSize, p.size)
+      e.sizes.push(p.size)
       if (outside(p, W, H, platform)) {
         e.outside += step
         if (e.firstOutside < 0) e.firstOutside = s.t
@@ -219,8 +219,10 @@ export function checkFrames(facts: CompFacts, samples: FrameSample[], platform: 
     if (e.outside >= Math.min(0.5, e.visible * 0.4)) {
       out.push({ level: 'error', at: e.firstOutside, message: `${name}: fuori dalla safe zone di ${platform.name} per ${e.outside.toFixed(1)} s, finisce sotto pulsanti o didascalie.` })
     }
-    if (e.minSize < minSize) {
-      out.push({ level: 'warning', at: e.first, message: `${name}: corpo ${Math.round(e.minSize)} px, sotto ${Math.round(minSize)} px non si legge bene su un telefono.` })
+    // The size it holds most of the time: entrances that scale the text up (pop, zoom) don't count.
+    const held = median(e.sizes)
+    if (held < minSize) {
+      out.push({ level: 'warning', at: e.first, message: `${name}: corpo ${Math.round(held)} px, sotto ${Math.round(minSize)} px non si legge bene su un telefono.` })
     }
     if (e.minContrast < 3) {
       out.push({ level: 'warning', at: e.contrastAt, message: `${name}: poco contrasto con lo sfondo (${e.minContrast.toFixed(1)}:1, serve almeno 3:1). Aggiungi un contorno, un fondo o scurisci l'immagine.` })
@@ -356,4 +358,10 @@ export function contrastRatio(a: number, b: number): number {
 export function formatFindings(list: Finding[]): string[] {
   const tag: Record<Severity, string> = { error: 'ERRORE    ', warning: 'ATTENZIONE', info: 'nota      ' }
   return list.map((f) => `${tag[f.level]} ${f.at !== undefined ? `[${fmt(f.at)}] ` : ''}${f.message}`)
+}
+
+function median(v: number[]): number {
+  if (!v.length) return Infinity
+  const s = [...v].sort((a, b) => a - b)
+  return s[s.length >> 1]
 }
