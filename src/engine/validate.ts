@@ -38,7 +38,7 @@ const layerKeys: Record<string, string[]> = {
   ],
   image: ['asset', 'width', 'height', 'fit', 'radius'],
   video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted'],
-  group: ['layers', 'width', 'height', 'clip', 'radius', 'fill', 'stroke'],
+  group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke'],
   captions: [
     'words', 'asset', 'mode', 'maxWords', 'maxChars', 'font', 'size', 'weight', 'italic', 'color', 'highlight',
     'uppercase', 'stroke', 'background', 'width', 'letterSpacing', 'lineHeight',
@@ -270,6 +270,11 @@ export function validate(input: unknown): Issue[] {
       }
       case 'group':
         checkLayers(l.layers, `${path}.layers`)
+        if (l.mask !== undefined) {
+          const m = l.mask as Record<string, unknown> | null
+          if (!m || typeof m !== 'object' || typeof m.d !== 'string' || !m.d.trim()) err(`${path}.mask`, 'A mask needs "d", SVG path data (e.g. a leaf or circle).')
+          else if (m.viewBox !== undefined && !(Array.isArray(m.viewBox) && m.viewBox.length === 4)) err(`${path}.mask.viewBox`, 'viewBox is [x, y, width, height].')
+        }
         break
       case 'captions': {
         if (l.words === undefined && l.asset === undefined) err(path, 'Captions need "words" ([{ text, start, end }]) or a "captions" asset.')
