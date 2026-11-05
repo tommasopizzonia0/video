@@ -292,9 +292,27 @@ export interface GroupLayer extends LayerBase {
   height?: Anim<number>
   /** Hide children outside the group box (with `radius`). */
   clip?: boolean
+  /** Clip children to an SVG shape (a leaf, a circle, a logo) that can move, scale and turn: a shape-mask reveal. */
+  mask?: GroupMask
   radius?: Anim<number>
   fill?: Fill
   stroke?: Stroke
+}
+
+export interface GroupMask {
+  /** SVG path data, in `viewBox` units. */
+  d: string
+  /** [x, y, w, h] of the path coordinates; the box is drawn `width` × `height` px. Default [0, 0, width, height]. */
+  viewBox?: [number, number, number, number]
+  /** Mask box size in px (default: the group size). */
+  width?: number
+  height?: number
+  /** Center of the mask in the group, px (default: the group center). */
+  x?: Anim<number>
+  y?: Anim<number>
+  /** Grow 0 → big to open the shape onto the content. */
+  scale?: Anim<number>
+  rotation?: Anim<number>
 }
 
 export interface CaptionWord {

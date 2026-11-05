@@ -21,6 +21,7 @@ import type {
   Composition,
   Fill,
   GroupLayer,
+  GroupMask,
   ImageLayer,
   Layer,
   PathLayer,
@@ -815,12 +816,32 @@ function drawGroup(env: Env, layer: GroupLayer, lt: number, duration: number, bw
     shape()
     ctx.clip()
   }
+  if (layer.mask) applyMask(ctx, layer.mask, lt, bw, bh)
   drawLayers(env, layer.layers, lt, bw, bh, duration)
   ctx.restore()
   if (layer.stroke) {
     shape()
     paint(env, undefined, layer.stroke, lt, bw, bh)
   }
+}
+
+const maskPaths = new Map<string, Path2D>()
+function applyMask(ctx: Ctx2D, m: GroupMask, lt: number, bw: number, bh: number) {
+  const mw = m.width ?? bw
+  const mh = m.height ?? bh
+  const [vx, vy, vw, vh] = m.viewBox ?? [0, 0, mw, mh]
+  let path = maskPaths.get(m.d)
+  if (!path) maskPaths.set(m.d, (path = new Path2D(m.d)))
+  const before = ctx.getTransform()
+  ctx.translate(num(m.x, lt, bw / 2), num(m.y, lt, bh / 2))
+  ctx.rotate((num(m.rotation, lt, 0) * Math.PI) / 180)
+  const s = num(m.scale, lt, 1)
+  ctx.scale(s, s)
+  ctx.translate(-mw / 2, -mh / 2)
+  ctx.scale(mw / vw, mh / vh)
+  ctx.translate(-vx, -vy)
+  ctx.clip(path)
+  ctx.setTransform(before)
 }
 
 function drawText(env: Env, layer: TextLayer, lt: number, duration: number) {

@@ -105,6 +105,8 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
 - **`video`** `asset`, `width`/`height` (default: fill the parent, `fit: "cover"`), `radius`,
   `sourceStart` (s into the source), `playbackRate`, `volume`, `muted`. Frames are decoded exactly, no drift.
 - **`group`** `layers`, `width`/`height` (default: parent size), `fill`, `stroke`, `radius`, `clip`.
+  `mask: { d, viewBox, width, height, x, y, scale, rotation }` clips the children to an SVG shape (x/y/scale/rotation anim):
+  animate `scale` from 0 to well past the frame for a shape reveal (a leaf opening onto the next shot).
   A group with `fill` + `radius` + `shadow` is a card. Animate a group to move everything in it
   (a "camera": scale/x/y keyframes on a full-frame group).
 - **`captions`** word-timed subtitles in the social style: short pages of 1–3 words, the spoken word

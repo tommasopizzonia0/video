@@ -307,6 +307,12 @@ describe('validation', () => {
     expect(msg).toContain('Did you mean "fadeUp"?')
     expect(msg).toContain('warning scenes[0].layers[1].colr')
   })
+  it('checks group shape masks', () => {
+    const ok = validate({ width: 100, height: 100, duration: 1, layers: [{ type: 'group', layers: [], mask: { d: 'M0 0 L10 0 L10 10 Z', viewBox: [0, 0, 10, 10], scale: [{ t: 0, v: 0 }, { t: 1, v: 3 }] } }] })
+    expect(ok.filter((i) => i.level === 'error')).toEqual([])
+    const bad = validate({ width: 100, height: 100, duration: 1, layers: [{ type: 'group', layers: [], mask: { viewBox: [0, 0] } }] })
+    expect(bad.map((i) => `${i.path}: ${i.message}`).join('\n')).toContain('layers[0].mask: A mask needs "d"')
+  })
   it('rejects bad JSON and missing assets', () => {
     expect(parseComposition('{').comp).toBeNull()
     const r = parseComposition(JSON.stringify({ width: 10, height: 10, duration: 1, layers: [{ type: 'image', asset: 'logo' }] }))
