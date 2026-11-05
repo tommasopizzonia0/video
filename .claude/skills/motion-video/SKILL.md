@@ -15,8 +15,13 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
    - `npm run render -- path/video.json --contact 24` and read the PNG: check hierarchy, overlaps,
      cut-off text, empty or frozen moments, and that every scene reads in half a second.
    - `--still 1.2,3.4` for a close look at a moment; `--scale 0.5` for a quick draft MP4.
+   - `npm run render -- path/video.json --check [--platform reels|tiktok|feed|youtube]`: safe zones of the
+     platform's ads, text size, contrast, reading time, empty frames and the hook. Fix every ERRORE and
+     weigh every ATTENZIONE before the final render.
 5. Render the final: `npm run render -- path/video.json -o out/video.mp4` (needs Chromium + ffmpeg;
    in a cloud container set `PLAYWRIGHT_BROWSERS_PATH` if Chromium is preinstalled elsewhere).
+   The render reads the file back and prints its specs (codec, yuv420p, fps, LUFS, true peak, faststart):
+   never call a video ready while that report lists a problem.
 6. Deliver the MP4 plus a poster frame (`--still`), and keep the JSON so the video can be edited
    later in the browser (Motion view, `#motion`).
 

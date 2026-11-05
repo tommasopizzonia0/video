@@ -26,6 +26,7 @@ Lo stesso file si trasforma in MP4 anche da terminale, senza aprire il browser:
 npx playwright install chromium   # una volta sola
 npm run render -- examples/launch.json              # crea examples/launch.mp4
 npm run render -- examples/launch.json --contact 24 # un'immagine con 24 fotogrammi, per controllare tutto il video
+npm run render -- examples/launch.json --check      # controllo prima della consegna: safe zone, leggibilità, gancio, file
 ```
 
 Serve [ffmpeg](https://ffmpeg.org) per l'MP4 migliore (senza, il video viene codificato nel browser).

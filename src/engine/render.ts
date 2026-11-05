@@ -122,6 +122,44 @@ interface Env {
   /** Output pixels per comp pixel. */
   scale: number
   pool: CanvasPool
+  /** Device px per comp px of `ctx` (differs from `scale` inside down-sampled blurs). */
+  px: number
+  /** When set, every text and caption drawn records where it landed (for the delivery checks). */
+  probe?: DrawnText[]
+}
+
+/** A text as drawn: its four corners in comp px, its font size and opacity. */
+export interface DrawnText {
+  layer: TextLayer | CaptionsLayer
+  text: string
+  corners: [number, number][]
+  size: number
+  alpha: number
+  /** A solid color for the glyphs (the first stop of a gradient); null when unknown. */
+  color: string | null
+  /** Has a stroke or a background box of its own, so the scene behind matters less. */
+  backed: boolean
+}
+
+/** A fill as one color at `lt`: itself, the current keyframed value, or a gradient's first stop. */
+function solidColor(fill: Fill, lt: number): string | null {
+  if (typeof fill === 'string') return fill
+  if ('stops' in fill) return fill.stops[0]?.[1] ?? null
+  return valueAt<string>(fill, lt, '#ffffff')
+}
+
+function probeText(env: Env, layer: TextLayer | CaptionsLayer, text: string, w: number, h: number, size: number, color: string | null, backed: boolean, x = 0, y = 0) {
+  if (!env.probe) return
+  const m = env.ctx.getTransform()
+  const k = 1 / env.px
+  const corners: [number, number][] = [
+    [x, y],
+    [x + w, y],
+    [x, y + h],
+    [x + w, y + h],
+  ].map(([cx, cy]) => [(m.a * cx + m.c * cy + m.e) * k, (m.b * cx + m.d * cy + m.f) * k])
+  const linear = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) * k
+  env.probe.push({ layer, text, corners, size: size * linear, alpha: env.ctx.globalAlpha, color, backed })
 }
 
 export interface RenderOptions {
@@ -149,6 +187,8 @@ export class Renderer {
   private scale: number
   private pool: CanvasPool
   private grain: AnyCanvas[] | null = null
+  /** Set to an array to collect where texts are drawn on the next `draw` calls (delivery checks). */
+  probe: DrawnText[] | null = null
 
   constructor(canvas: AnyCanvas, comp: Composition, res: Resources, options: RenderOptions = {}) {
     this.comp = comp
@@ -196,7 +236,7 @@ export class Renderer {
   }
 
   private drawInto(ctx: Ctx2D, t: number, effects = true) {
-    const env: Env = { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool }
+    const env: Env = { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined }
     ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
     ctx.globalAlpha = 1
     ctx.filter = 'none'
@@ -223,7 +263,7 @@ export class Renderer {
   private offscreen(draw: (env: Env) => void) {
     const off = this.pool.take()
     off.ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
-    draw({ ctx: off.ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool })
+    draw({ ctx: off.ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined })
     return off
   }
 
@@ -590,7 +630,7 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   } else {
     applyLook(outer, layer, opacity, fullFilter)
   }
-  const e: Env = { ...env, ctx: target }
+  const e: Env = { ...env, ctx: target, px: env.px * down }
 
   const x = num(layer.x, lt, pw / 2)
   // Captions sit in the lower third by default, clear of the platform buttons at the very bottom.
@@ -850,6 +890,11 @@ function drawText(env: Env, layer: TextLayer, lt: number, duration: number) {
   const fill = layer.color ?? '#ffffff'
   const fillStyle = makeFill(ctx, fill, lt, 0, 0, layout.w, layout.h)
   const accentFill = layer.accent?.color !== undefined ? makeFill(ctx, layer.accent.color, lt, 0, 0, layout.w, layout.h) : fillStyle
+  if (env.probe) {
+    const x = Math.min(...layout.lines.map((l) => l.x))
+    const w = Math.max(...layout.lines.map((l) => l.x + l.w)) - x
+    probeText(env, layer, textOf(layer, lt), w, layout.h, layer.size ?? DEFAULT_SIZE, solidColor(fill, lt), !!layer.stroke || !!layer.background, x)
+  }
 
   if (layer.background) {
     const bg = layer.background
@@ -1034,6 +1079,7 @@ function drawCaptions(env: Env, layer: CaptionsLayer, lt: number) {
   const reveal = layer.mode === 'reveal'
   // The page arrives with a short pop; in reveal mode each word pops on its own start instead.
   const pageIn = Math.min(1, (lt - page.start) / 0.12)
+  probeText(env, layer, page.words.map((w) => w.text).join(' '), layout.w, layout.h, layout.size, solidColor(layer.color ?? '#ffffff', lt), layer.stroke !== false || !!layer.background)
 
   if (layer.background) {
     const bg = layer.background

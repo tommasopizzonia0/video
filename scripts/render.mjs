@@ -31,6 +31,10 @@ function usage(msg) {
   --crf <n>             x264 quality, lower is better (default 16)
   --no-motion-blur      skip motion blur even if the composition asks for it
   --srt                 only write the captions as an .srt file next to the JSON
+  --check               delivery checks instead of a render: safe zones, text size, contrast,
+                        reading time, empty frames, the hook; and the specs of the .mp4 if it exists
+  --platform <id>       safe zones to check against: reels, tiktok, feed, youtube
+                        (default: from the shape, 9:16 = reels)
   --workers <n>         browser pages rendering in parallel (default: CPU cores - 1)`)
   process.exit(msg ? 1 : 0)
 }
@@ -55,11 +59,16 @@ function parseArgs(argv) {
     else if (a === '--png') opts.png = true
     else if (a === '--no-motion-blur') opts.motionBlur = false
     else if (a === '--srt') opts.srt = true
+    else if (a === '--check') opts.check = true
+    else if (a === '--platform') opts.platform = next()
     else if (a === '--workers') opts.workers = Number(next())
     else if (a.startsWith('-')) usage(`unknown option ${a}`)
     else rest.push(a)
   }
   if (rest.length !== 1) usage('pass exactly one composition file')
+  if (opts.platform && !['reels', 'tiktok', 'feed', 'youtube'].includes(opts.platform)) usage(`unknown platform ${opts.platform}`)
+  // Checks look at positions, not pixels: a half-size draw is enough and four times faster.
+  if (opts.check && !argv.includes('--scale')) opts.scale = 0.5
   opts.input = resolve(rest[0])
   return opts
 }
@@ -181,6 +190,55 @@ function loudnorm(input, output, target) {
   return { file: output, before: Number(m.input_i) }
 }
 
+/** Codec, size, frame rate and loudness of a rendered file, for the delivery checks. */
+function fileFacts(file) {
+  const r = spawnSync('ffprobe', ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', file], { encoding: 'utf8' })
+  if (r.status !== 0) throw new Error(`ffprobe could not read ${file}`)
+  const info = JSON.parse(r.stdout)
+  const v = info.streams.find((x) => x.codec_type === 'video')
+  const a = info.streams.find((x) => x.codec_type === 'audio')
+  const [num, den] = String(v.avg_frame_rate || v.r_frame_rate).split('/').map(Number)
+  const facts = {
+    width: v.width,
+    height: v.height,
+    fps: Math.round((num / (den || 1)) * 1000) / 1000,
+    duration: Number(info.format.duration),
+    videoCodec: v.codec_name,
+    profile: v.profile ?? '',
+    pixFmt: v.pix_fmt,
+    colorSpace: v.color_space,
+    audioCodec: a?.codec_name,
+    sampleRate: a ? Number(a.sample_rate) : undefined,
+    channels: a?.channels,
+    bytes: statSync(file).size,
+    faststart: false,
+  }
+  // faststart: the moov box (the index) comes before mdat (the frames).
+  const head = readFileSync(file).subarray(0, 4 * 1024 * 1024)
+  const moov = head.indexOf('moov')
+  const mdat = head.indexOf('mdat')
+  facts.faststart = moov >= 0 && (mdat < 0 || moov < mdat)
+  if (a) {
+    const m = spawnSync('ffmpeg', ['-hide_banner', '-nostats', '-i', file, '-map', '0:a', '-af', 'ebur128=peak=true', '-f', 'null', '-'], { encoding: 'utf8' })
+    const summary = (m.stderr ?? '').split('Summary:').pop()
+    const i = /I:\s+(-?[\d.]+|-inf) LUFS/.exec(summary)
+    const p = /Peak:\s+(-?[\d.]+|-inf) dBFS/.exec(summary)
+    if (i) facts.loudness = i[1] === '-inf' ? -Infinity : Number(i[1])
+    if (p) facts.truePeak = p[1] === '-inf' ? -Infinity : Number(p[1])
+  }
+  return facts
+}
+
+async function reportFile(page, file, platform) {
+  const facts = fileFacts(file)
+  const r = await page.evaluate(([f, p]) => window.motion.checkFile(f, p), [facts, platform ?? null])
+  const sound = facts.audioCodec ? `, audio ${facts.loudness?.toFixed(1)} LUFS, picco ${facts.truePeak?.toFixed(1)} dBTP` : ''
+  console.log(`\nfile ${basename(file)}: ${facts.width}×${facts.height} ${facts.fps}fps ${facts.duration.toFixed(2)}s ${facts.videoCodec}/${facts.pixFmt}${sound}`)
+  for (const line of r.lines) console.log(`  ${line}`)
+  if (!r.lines.length) console.log('  nessun problema')
+  return r.errors
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   const comp = JSON.parse(readFileSync(opts.input, 'utf8'))
@@ -246,6 +304,21 @@ async function main() {
       const file = opts.out ? resolve(opts.out) : `${stem}.srt`
       writeFileSync(file, text)
       console.log(file)
+      return
+    }
+    if (opts.check) {
+      console.log(`controllo ${basename(opts.input)} (${duration.toFixed(1)} s)…`)
+      const r = await page.evaluate(([p]) => window.motion.check(p), [opts.platform ?? null])
+      console.log(`\nsafe zone: ${r.platform} — ${r.source}`)
+      for (const line of r.lines) console.log(`  ${line}`)
+      if (!r.lines.length) console.log('  nessun problema')
+      let errors = r.errors
+      const file = resolve(opts.out ?? `${stem}.mp4`)
+      if (existsSync(file)) {
+        if (statSync(file).mtimeMs < statSync(opts.input).mtimeMs) console.log(`\n(${basename(file)} è più vecchio del JSON: va rifatto il render)`)
+        errors += await reportFile(page, file, opts.platform)
+      }
+      if (errors) process.exitCode = 2
       return
     }
     if (opts.still) {
@@ -355,6 +428,8 @@ async function main() {
     ff.stdin.end()
     await done
     console.log(`\n${out}  ${width}×${height} ${fps}fps ${(frames / fps).toFixed(2)}s`)
+    // Every render ends by reading the file back: what was written, not what was meant.
+    if (opts.scale === 1 && from === 0 && to === duration) await reportFile(page, out, opts.platform)
   } finally {
     await browser.close()
     await server.close()

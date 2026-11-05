@@ -10,7 +10,26 @@ npm run render -- examples/launch.json --contact 24     # one PNG with 24 frames
 npm run render -- examples/launch.json --still 1.2,4    # PNG stills at those times
 npm run render -- examples/launch.json --scale 0.5      # fast half-size draft
 npm run render -- examples/launch.json --from 3 --to 6  # only part of the timeline
+npm run render -- examples/launch.json --check          # delivery checks (below)
 ```
+
+### Delivery checks
+
+`--check` samples the video every 0.1 s and reports, with the time of each problem:
+
+- **Safe zones**: text that stays where the platform's buttons and captions cover it. `--platform reels`
+  (Meta Reels/Stories ads: 14% top, 35% bottom, 6% sides; the default for 9:16), `tiktok` (TikTok's ads
+  template, including the button column on the right), `feed` (4:5 and 1:1, 5% margins; the default for
+  them), `youtube` (16:9, 5%). Entrances that pass through the edge and transitions are ignored.
+- **Legibility**: text under 2.2% of the frame height (42 px on 1920), contrast under 3:1 against what
+  surrounds it (texts with a `stroke` or `background` are skipped), text on screen for less time than it
+  takes to read (about 3.5 words a second).
+- **Rhythm**: an empty first frame, empty stretches, no movement and no text in the first 2 seconds,
+  a length outside the platform's range, a frame shape that isn't the platform's.
+- **The file**: when the `.mp4` exists (or `-o file.mp4`), its codec, yuv420p, size, fps, faststart,
+  AAC audio, loudness and true peak. Every full render prints this report on its own.
+
+The exit code is 2 when there are errors, so a script can stop a delivery.
 
 The renderer needs Chromium (`npx playwright install chromium`, or Google Chrome) and ffmpeg for the
 final MP4 (H.264 + AAC, BT.709). Without ffmpeg it encodes inside the browser instead.
