@@ -56,6 +56,33 @@ Errors and warnings name the exact path, e.g. `scenes[1].layers[2].in: Unknown p
 
 Paths in `src` are relative to the JSON file. `duration` of the comp defaults to the end of the last scene.
 
+## Platforms and format variants
+
+`"platform"`: `reels` (Instagram/Facebook Reels and Stories), `tiktok`, `feed` (4:5 and 1:1) or `youtube`
+(16:9). It sets the safe zones that `--check` and the studio's **Safe zone** guides use; without it the
+shape decides (9:16 = reels).
+
+`"variants"` delivers the same video in other formats. Each one sets a new `width`/`height`, a `platform`
+and `layers`: properties that replace those of the layer with that `id` (anywhere, also inside groups).
+
+```jsonc
+"platform": "reels",
+"variants": {
+  "feed": { "width": 1080, "height": 1350, "platform": "feed", "layers": { "titolo": { "y": 420 }, "cta": { "y": 1080 } } },
+  "tiktok": { "platform": "tiktok", "layers": { "cta": { "x": 460 } } }
+}
+```
+
+```bash
+npm run render -- spot.json --variant feed      # → spot-feed.mp4
+npm run render -- spot.json --variant all       # every variant, each with its own file report
+npm run render -- spot.json --variant feed --check
+```
+
+Layers without `x`/`y` stay centered in any frame and full-frame media fill it (`fit: "cover"`), so they
+need nothing. Anything placed in pixels does: give it an `id` and an override. In the studio, the
+**Formato** menu previews each variant.
+
 ## Time
 
 - A **scene** has a `duration` and its own clock starting at 0. A `transition` makes it start
@@ -135,8 +162,7 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
   `highlight` color, default `#FFE45E`) or `reveal` (words pop in as they are said). `maxWords` (3),
   `maxChars` (22), `font`, `size` (default 72 on 1080), `weight` (800), `italic`, `color`, `uppercase`,
   `stroke` (black outline by default, `false` for none), `background` (a pill behind the page),
-  `width` (wrap width, default 80% of the frame), `letterSpacing`, `lineHeight`. Default position:
-  70% of the height on vertical videos (clear of the platform UI), 84% on horizontal ones.
+  `width` (wrap width, default 80% of the frame), `letterSpacing`, `lineHeight`. Default position: centered at 58% of the height on 9:16 (above the 35% that ads cover with the caption and the button), 70% on other vertical shapes, 84% on horizontal ones.
   Put it in the top-level `layers` so it runs across scenes. Word timings come from a transcription,
   for example `whisper audio.mp3 --word_timestamps True --output_format json`.
 

@@ -460,9 +460,26 @@ export interface Effects {
   motionBlur?: { samples?: number; shutter?: number }
 }
 
+/** Where the video runs: sets the safe zones of the checks and the studio guides. */
+export type PlatformId = 'reels' | 'tiktok' | 'feed' | 'youtube'
+
+/** The same video in another format: a new frame size and platform, and layers patched by id. */
+export interface Variant {
+  width?: number
+  height?: number
+  platform?: PlatformId
+  /** Properties that replace those of the layer with that id, e.g. { "titolo": { "y": 520, "size": 96 } }. */
+  layers?: Record<string, Record<string, unknown>>
+  comment?: string
+}
+
 export interface Composition {
   width: number
   height: number
+  /** Target platform (default: from the shape, 9:16 = reels). */
+  platform?: PlatformId
+  /** Other formats of the same video, rendered with `--variant <name>`. */
+  variants?: Record<string, Variant>
   fps?: number
   /** Seconds. Defaults to the end of the last scene. */
   duration?: number

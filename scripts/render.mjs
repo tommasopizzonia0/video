@@ -33,6 +33,7 @@ function usage(msg) {
   --srt                 only write the captions as an .srt file next to the JSON
   --check               delivery checks instead of a render: safe zones, text size, contrast,
                         reading time, empty frames, the hook; and the specs of the .mp4 if it exists
+  --variant <name|all>  render a format variant from "variants" (output gets -<name>); all = each one
   --platform <id>       safe zones to check against: reels, tiktok, feed, youtube
                         (default: from the shape, 9:16 = reels)
   --workers <n>         browser pages rendering in parallel (default: CPU cores - 1)`)
@@ -61,6 +62,7 @@ function parseArgs(argv) {
     else if (a === '--srt') opts.srt = true
     else if (a === '--check') opts.check = true
     else if (a === '--platform') opts.platform = next()
+    else if (a === '--variant') opts.variant = next()
     else if (a === '--workers') opts.workers = Number(next())
     else if (a.startsWith('-')) usage(`unknown option ${a}`)
     else rest.push(a)
@@ -242,6 +244,21 @@ async function reportFile(page, file, platform) {
 async function main() {
   const opts = parseArgs(process.argv.slice(2))
   const comp = JSON.parse(readFileSync(opts.input, 'utf8'))
+  if (opts.variant === 'all') {
+    // Each variant in its own run, with the same options.
+    const names = Object.keys(comp.variants ?? {})
+    if (!names.length) throw new Error('The composition has no "variants".')
+    const argv = process.argv.slice(2)
+    const i = argv.indexOf('--variant')
+    for (const name of names) {
+      console.log(`\n== ${name} ==`)
+      const args = [...argv.slice(0, i), '--variant', name, ...argv.slice(i + 2)]
+      const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url), ...args], { stdio: 'inherit' })
+      if (r.status) process.exitCode = r.status
+    }
+    return
+  }
+  if (opts.variant && opts.out && opts.out.includes('{variant}')) opts.out = opts.out.replace('{variant}', opts.variant)
   const projectDir = dirname(opts.input)
   const cacheDir = join(tmpdir(), 'video-editor-render-cache')
   mkdirSync(cacheDir, { recursive: true })
@@ -291,12 +308,12 @@ async function main() {
       for (const src of bad) overrides[src] = `${origin}/__cache/${basename(toWebm(resolve(projectDir, src), cacheDir))}`
     }
 
-    const load = (p) => p.evaluate(([c, b, s, o]) => window.motion.load(c, b, s, o), [comp, base, opts.scale, overrides])
+    const load = (p) => p.evaluate(([c, b, s, o, v]) => window.motion.load(c, b, s, o, v), [comp, base, opts.scale, overrides, opts.variant ?? null])
     const info = await load(page)
     for (const i of info.issues) console.error(`${i.level}: ${i.path || '(root)'}: ${i.message}`)
     if (info.issues.some((i) => i.level === 'error')) process.exit(1)
     const { width, height, fps, duration } = info
-    const stem = join(projectDir, basename(opts.input, extname(opts.input)))
+    const stem = join(projectDir, basename(opts.input, extname(opts.input)) + (opts.variant ? `-${opts.variant}` : ''))
 
     if (opts.srt) {
       const text = await page.evaluate(() => window.motion.srt())

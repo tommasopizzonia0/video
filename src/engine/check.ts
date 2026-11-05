@@ -69,6 +69,11 @@ export const PLATFORMS: Record<string, Platform> = {
   },
 }
 
+/** The platform asked for, the one the comp names, or the one its shape suggests. */
+export function platformFor(comp: { width: number; height: number; platform?: string }, asked?: string | null): Platform {
+  return PLATFORMS[asked ?? ''] ?? PLATFORMS[comp.platform ?? ''] ?? defaultPlatform(comp.width, comp.height)
+}
+
 /** The platform a comp most likely targets, from its shape. */
 export function defaultPlatform(width: number, height: number): Platform {
   const a = width / height
@@ -180,6 +185,31 @@ export function checkFrames(facts: CompFacts, samples: FrameSample[], platform: 
         e.contrastAt = s.t
       }
     }
+  }
+
+  // Texts on top of each other (a caption over a button, a title over a price).
+  const overlaps = new Map<string, { a: string; b: string; time: number; at: number }>()
+  for (const s of samples) {
+    if (s.transition) continue
+    const vis = s.texts.filter((p) => p.alpha >= 0.5)
+    for (let i = 0; i < vis.length; i++)
+      for (let j = i + 1; j < vis.length; j++) {
+        const a = vis[i]
+        const b = vis[j]
+        if (a.key === b.key) continue
+        const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)
+        const h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0)
+        if (w <= 0 || h <= 0) continue
+        const smaller = Math.min((a.x1 - a.x0) * (a.y1 - a.y0), (b.x1 - b.x0) * (b.y1 - b.y0))
+        if (w * h < smaller * 0.1) continue
+        const id = [a.key, b.key].sort().join('|')
+        const e = overlaps.get(id) ?? { a: a.kind === 'captions' ? 'Sottotitoli' : `"${a.label}"`, b: b.kind === 'captions' ? 'sottotitoli' : `"${b.label}"`, time: 0, at: s.t }
+        e.time += step
+        overlaps.set(id, e)
+      }
+  }
+  for (const o of overlaps.values()) {
+    if (o.time >= 0.3) out.push({ level: 'error', at: o.at, message: `${o.a} e ${o.b} si sovrappongono per ${o.time.toFixed(1)} s.` })
   }
 
   const minSize = H * 0.022

@@ -2,7 +2,7 @@
 // that the CLI drives through Playwright: load a composition, draw frames, export.
 
 import { audioMix } from './engine/audio'
-import { checkFile, checkFrames, contrastRatio, defaultPlatform, formatFindings, PLATFORMS, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './engine/check'
+import { checkFile, checkFrames, contrastRatio, formatFindings, platformFor, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './engine/check'
 import { parseColor } from './engine/color'
 import { captionPages, pageText, toSrt } from './engine/captions'
 import { exportVideo, renderAudio } from './engine/export'
@@ -12,6 +12,7 @@ import { activeScenes, placedLayers } from './engine/timeline'
 import { BrowserResources } from './engine/resources'
 import type { Composition } from './engine/types'
 import { validate } from './engine/validate'
+import { applyVariant } from './engine/variants'
 
 interface Session {
   comp: Composition
@@ -35,9 +36,17 @@ function canvasBlob(canvas: HTMLCanvasElement, type: string, quality?: number): 
 
 const api = {
   /** Validates and loads a composition; asset paths resolve against `base`, with `overrides` replacing some. */
-  async load(comp: Composition, base: string, scale: number, overrides: Record<string, string> = {}) {
+  async load(comp: Composition, base: string, scale: number, overrides: Record<string, string> = {}, variant: string | null = null) {
     const issues = validate(comp)
     if (issues.some((i) => i.level === 'error')) return { issues }
+    if (variant) {
+      try {
+        const v = applyVariant(comp, variant)
+        comp = v.comp
+      } catch (e) {
+        return { issues: [{ level: 'error' as const, path: 'variants', message: e instanceof Error ? e.message : String(e) }] }
+      }
+    }
     await session?.res.dispose()
     const resolve = (src: string) => overrides[src] ?? new URL(src, base).href
     const res = await BrowserResources.load(comp, resolve)
@@ -144,7 +153,7 @@ const api = {
    */
   async check(platformId: string | null, step = 0.1) {
     const s = session!
-    const platform = (platformId && PLATFORMS[platformId]) || defaultPlatform(s.comp.width, s.comp.height)
+    const platform = platformFor(s.comp, platformId)
     const keys = new WeakMap<object, string>()
     let nextKey = 0
     const keyOf = (o: object) => {
@@ -222,7 +231,7 @@ const api = {
   /** Checks a rendered file's specs (gathered by the CLI with ffprobe) against the comp. */
   checkFile(facts: FileFacts, platformId: string | null) {
     const s = session!
-    const platform = (platformId && PLATFORMS[platformId]) || defaultPlatform(s.comp.width, s.comp.height)
+    const platform = platformFor(s.comp, platformId)
     const findings = checkFile(facts, { width: s.comp.width, height: s.comp.height, fps: s.renderer.fps, duration: s.renderer.duration, loudness: s.comp.mix?.loudness ?? -14 }, platform)
     return { lines: formatFindings(findings), errors: findings.filter((f) => f.level === 'error').length }
   },

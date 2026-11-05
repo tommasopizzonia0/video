@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { checkFile, checkFrames, contrastRatio, defaultPlatform, PLATFORMS, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './check'
+import { checkFile, checkFrames, contrastRatio, defaultPlatform, platformFor, PLATFORMS, relativeLuminance, type FileFacts, type FrameSample, type TextProbe } from './check'
+import type { Composition } from './types'
+import { validate } from './validate'
+import { applyVariant } from './variants'
 
 const W = 1080
 const H = 1920
@@ -33,7 +36,7 @@ describe('delivery checks: frames', () => {
     expect(issues.filter((i) => i.level === 'error').map((i) => i.message)).toEqual([expect.stringContaining('"cta"')])
 
     // Slides up through the bottom zone for 0.3 s, then sits in the middle for 3 s.
-    const entering = (t: number) => (t < 0.3 ? [text('sale', [300, 1500 - t * 2000, 780, 1600 - t * 2000])] : t < 3.3 ? [text('sale', [300, 800, 780, 900])] : [])
+    const entering = (t: number) => (t < 0.3 ? [text('sale', [300, 1500 - t * 2000, 780, 1600 - t * 2000])] : t < 3.3 ? [text('sale', [300, 1000, 780, 1100])] : [])
     expect(checkFrames(facts, samples(8, (t) => [centered, ...entering(t)]), PLATFORMS.reels).filter((i) => i.level === 'error')).toEqual([])
   })
 
@@ -77,6 +80,15 @@ describe('delivery checks: frames', () => {
     expect(msg).toMatch(/Nessun gancio/)
   })
 
+  it('finds texts on top of each other, but not ones that only touch', () => {
+    const cta = text('cta', [300, 1000, 780, 1100])
+    const caption = text('sub', [350, 1020, 730, 1090], { kind: 'captions' })
+    const near = text('vicino', [300, 1100, 780, 1160])
+    const msg = checkFrames(facts, samples(8, () => [centered, cta, caption, near]), PLATFORMS.reels).map((i) => i.message).join('\n')
+    expect(msg).toMatch(/"cta" e sottotitoli si sovrappongono|Sottotitoli e "cta" si sovrappongono/)
+    expect(msg).not.toMatch(/vicino/)
+  })
+
   it('checks format and length against the platform', () => {
     const msg = checkFrames({ width: 1920, height: 1080, duration: 75 }, samples(2, () => [centered]), PLATFORMS.reels).map((i) => i.message).join('\n')
     expect(msg).toMatch(/1920×1080 non è quello/)
@@ -115,5 +127,47 @@ describe('delivery checks: file', () => {
 
   it('does not judge loudness when the comp opts out', () => {
     expect(checkFile({ ...good, loudness: -23 }, { ...expected, loudness: false }, PLATFORMS.reels)).toEqual([])
+  })
+})
+
+describe('format variants', () => {
+  const comp = {
+    width: 1080,
+    height: 1920,
+    platform: 'reels',
+    scenes: [{ duration: 3, layers: [{ type: 'text', id: 'titolo', text: 'Ciao', y: 500 }, { type: 'group', layers: [{ type: 'text', id: 'cta', text: 'Compra', y: 1100 }] }] }],
+    variants: {
+      feed: { width: 1080, height: 1350, platform: 'feed', layers: { titolo: { y: 380, size: 90 }, cta: { y: 900 } } },
+      orizzontale: { width: 1920, height: 1080, layers: { manca: { y: 1 } } },
+    },
+  } as unknown as Composition
+
+  it('changes the frame and patches layers by id, also inside groups', () => {
+    const { comp: feed, missing } = applyVariant(comp, 'feed')
+    expect([feed.width, feed.height, feed.platform]).toEqual([1080, 1350, 'feed'])
+    const layers = feed.scenes![0].layers as unknown as Record<string, unknown>[]
+    expect(layers[0]).toMatchObject({ y: 380, size: 90, text: 'Ciao' })
+    expect((layers[1].layers as Record<string, unknown>[])[0]).toMatchObject({ y: 900 })
+    expect(missing).toEqual([])
+    expect(feed.variants).toBeUndefined()
+    // The original is untouched.
+    expect((comp.scenes![0].layers[0] as unknown as { y: number }).y).toBe(500)
+  })
+
+  it('reports override ids that match no layer, and unknown variants', () => {
+    expect(applyVariant(comp, 'orizzontale').missing).toEqual(['manca'])
+    expect(() => applyVariant(comp, 'quadrato')).toThrow(/feed, orizzontale/)
+  })
+
+  it('validates platform and variants', () => {
+    const issues = validate({ ...comp, platform: 'tiktk' })
+    expect(issues.find((i) => i.path === 'platform')?.message).toMatch(/tiktok/)
+    expect(validate(comp).find((i) => i.path === 'variants.orizzontale.layers.manca')?.level).toBe('warning')
+  })
+
+  it('the platform comes from the option, then the comp, then the shape', () => {
+    expect(platformFor({ width: 1080, height: 1920 }).id).toBe('reels')
+    expect(platformFor({ width: 1080, height: 1920, platform: 'tiktok' }).id).toBe('tiktok')
+    expect(platformFor({ width: 1080, height: 1920, platform: 'tiktok' }, 'reels').id).toBe('reels')
   })
 })

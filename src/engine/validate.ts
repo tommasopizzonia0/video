@@ -6,6 +6,7 @@ import { isKnownEase } from './easing'
 import { PRESET_NAMES } from './presets'
 import { SFX_NAMES } from './sfx'
 import type { Composition } from './types'
+import { layerIds } from './variants'
 
 export interface Issue {
   level: 'error' | 'warning'
@@ -48,7 +49,8 @@ const animatable = new Set([
   'x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast',
   'saturate', 'grayscale', 'hueRotate', 'width', 'height', 'radius', 'trimStart', 'trimEnd',
 ])
-const compKeys = ['$schema', 'comment', 'width', 'height', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects']
+const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects']
+export const PLATFORM_IDS = ['reels', 'tiktok', 'feed', 'youtube']
 const sceneKeys = ['id', 'comment', 'duration', 'background', 'layers', 'transition']
 const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
 const blendModes = [
@@ -103,6 +105,38 @@ export function validate(input: unknown): Issue[] {
   if (comp.fps !== undefined && (!isNum(comp.fps) || comp.fps <= 0 || comp.fps > 120)) err('fps', 'Must be between 1 and 120.')
   if (comp.duration !== undefined && (!isNum(comp.duration) || comp.duration <= 0)) err('duration', 'Must be a positive number of seconds.')
   if (comp.scenes === undefined && comp.layers === undefined) err('', 'Add "scenes" or "layers".')
+  const checkPlatform = (v: unknown, path: string) => {
+    if (v !== undefined && !PLATFORM_IDS.includes(v as string)) err(path, `Unknown platform.${suggest(String(v), PLATFORM_IDS)} Options: ${PLATFORM_IDS.join(', ')}.`)
+  }
+  checkPlatform(comp.platform, 'platform')
+  if (comp.variants !== undefined) {
+    if (!isObj(comp.variants)) err('variants', 'Must be an object of { name: { width, height, platform, layers } }.')
+    else {
+      let ids = new Set<string>()
+      try {
+        ids = layerIds(comp)
+      } catch {
+        // Malformed scenes or layers are reported below.
+      }
+      for (const [name, v] of Object.entries(comp.variants)) {
+        const p = `variants.${name}`
+        if (!isObj(v)) {
+          err(p, 'Must be { width, height, platform, layers }.')
+          continue
+        }
+        keys(v, ['width', 'height', 'platform', 'layers', 'comment'], p)
+        for (const k of ['width', 'height'] as const) if (v[k] !== undefined && (!isNum(v[k]) || (v[k] as number) <= 0)) err(`${p}.${k}`, 'Must be a positive number of pixels.')
+        checkPlatform(v.platform, `${p}.platform`)
+        if (v.layers !== undefined) {
+          if (!isObj(v.layers)) err(`${p}.layers`, 'Must be { "<layer id>": { property: value } }.')
+          else for (const [id, o] of Object.entries(v.layers)) {
+            if (!ids.has(id)) warn(`${p}.layers.${id}`, `No layer has the id "${id}".${suggest(id, [...ids])}`)
+            if (!isObj(o)) err(`${p}.layers.${id}`, 'Must be an object of properties.')
+          }
+        }
+      }
+    }
+  }
   if (comp.scenes === undefined && comp.duration === undefined && comp.layers !== undefined)
     warn('duration', 'Without scenes, set "duration" explicitly.')
 

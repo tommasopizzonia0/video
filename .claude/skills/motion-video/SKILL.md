@@ -15,6 +15,8 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
    - `npm run render -- path/video.json --contact 24` and read the PNG: check hierarchy, overlaps,
      cut-off text, empty or frozen moments, and that every scene reads in half a second.
    - `--still 1.2,3.4` for a close look at a moment; `--scale 0.5` for a quick draft MP4.
+   - Set `"platform"` and, when the spot runs in more than one format, `"variants"` (ids on every layer
+     placed in pixels; see docs/MOTION.md). Check and render each with `--variant <name>` or `all`.
    - `npm run render -- path/video.json --check [--platform reels|tiktok|feed|youtube]`: safe zones of the
      platform's ads, text size, contrast, reading time, empty frames and the hook. Fix every ERRORE and
      weigh every ATTENZIONE before the final render.

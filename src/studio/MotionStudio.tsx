@@ -2,12 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { audioMix, scheduleMix } from '../engine/audio'
+import { platformFor } from '../engine/check'
 import { exportVideo } from '../engine/export'
 import { Renderer, videoRequests } from '../engine/render'
 import { BrowserResources } from '../engine/resources'
 import { sceneStarts } from '../engine/timeline'
 import type { Composition } from '../engine/types'
 import { parseComposition, type Issue } from '../engine/validate'
+import { applyVariant } from '../engine/variants'
 import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type LiveUpdate } from './live'
 import { formatTime } from '../timeline'
 
@@ -79,8 +81,35 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     [files],
   )
 
+  // The format shown: the comp itself or one of its variants (9:16, 4:5, 1:1, 16:9).
+  const [variant, setVariant] = useState('')
+  const [guides, setGuides] = useState(true)
+  const variantNames = useMemo(() => Object.keys(parsed.comp?.variants ?? {}), [parsed.comp])
+  const comp = useMemo(() => {
+    const base = parsed.comp
+    if (!base || !variant || !base.variants?.[variant]) return base
+    return applyVariant(base, variant).comp
+  }, [parsed.comp, variant])
+
+  // Where the canvas sits in the stage, for the safe-zone guides drawn over it.
+  const [canvasBox, setCanvasBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  useEffect(() => {
+    const canvas = canvasRef.current
+    const stage = canvas?.parentElement
+    if (!canvas || !stage) return
+    const measure = () => {
+      const c = canvas.getBoundingClientRect()
+      const s = stage.getBoundingClientRect()
+      setCanvasBox({ left: c.left - s.left, top: c.top - s.top, width: c.width, height: c.height })
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(canvas)
+    ro.observe(stage)
+    measure()
+    return () => ro.disconnect()
+  }, [])
+
   // Load fonts and media whenever the composition changes.
-  const comp = parsed.comp
   const missing = useMemo(
     () =>
       Object.values(comp?.assets ?? {})
@@ -379,6 +408,25 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
               Segui Claude
             </label>
           )}
+          {variantNames.length > 0 && (
+            <label className="field-inline" title="I formati definiti in &quot;variants&quot;">
+              Formato
+              <select value={variant} onChange={(e) => setVariant(e.target.value)}>
+                <option value="">
+                  Originale {parsed.comp ? `${parsed.comp.width}×${parsed.comp.height}` : ''}
+                </option>
+                {variantNames.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          <label className="field-inline" title="Le zone coperte da pulsanti e didascalie della piattaforma">
+            <input type="checkbox" checked={guides} onChange={(e) => setGuides(e.target.checked)} />
+            Safe zone
+          </label>
           <label className="field-inline">
             Esempio
             <select value="" onChange={(e) => e.target.value && setText(EXAMPLES.find((x) => x.name === e.target.value)!.text)}>
@@ -441,6 +489,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         )}
         <div className="stage" ref={stageRef}>
           <canvas ref={canvasRef} />
+          {guides && session && canvasBox && <SafeZone comp={session.comp} box={canvasBox} />}
           {status && <div className="stage-empty">{status}</div>}
         </div>
         <div className="transport">
@@ -512,6 +561,29 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/** The platform's covered areas, shaded over the preview, with the safe area outlined. */
+function SafeZone({ comp, box }: { comp: Composition; box: { left: number; top: number; width: number; height: number } }) {
+  const p = platformFor(comp)
+  const [l, t, r, b] = p.safe
+  const pct = (v: number) => `${(v * 100).toFixed(2)}%`
+  const shades: [number, number, number, number][] = [
+    [0, 0, 1, t],
+    [0, b, 1, 1],
+    [0, t, l, b],
+    [r, t, 1, b],
+    ...(p.blocked ?? []),
+  ]
+  return (
+    <div className="safe-zone" style={{ left: box.left, top: box.top, width: box.width, height: box.height }} title={`Safe zone: ${p.name} (${p.source})`}>
+      {shades.map(([x0, y0, x1, y1], i) => (
+        <div key={i} className="safe-shade" style={{ left: pct(x0), top: pct(y0), width: pct(x1 - x0), height: pct(y1 - y0) }} />
+      ))}
+      <div className="safe-frame" style={{ left: pct(l), top: pct(t), width: pct(r - l), height: pct(b - t) }} />
+      <span className="safe-label">{p.name}</span>
     </div>
   )
 }

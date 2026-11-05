@@ -633,8 +633,9 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   const e: Env = { ...env, ctx: target, px: env.px * down }
 
   const x = num(layer.x, lt, pw / 2)
-  // Captions sit in the lower third by default, clear of the platform buttons at the very bottom.
-  const y = num(layer.y, lt, layer.type === 'captions' ? ph * (ph > pw ? 0.7 : 0.84) : ph / 2)
+  // Captions sit low by default but above the platform UI: on 9:16 ads the bottom 35% is covered
+  // by the caption, the call-to-action button and the account name, so they center at 58%.
+  const y = num(layer.y, lt, layer.type === 'captions' ? ph * (pw / ph < 0.7 ? 0.58 : ph > pw ? 0.7 : 0.84) : ph / 2)
   const [ax, ay] = layer.anchor ?? [0.5, 0.5]
   const scale = num(layer.scale, lt, 1) * mod.scale
   target.translate(x + mod.dx, y + mod.dy)
