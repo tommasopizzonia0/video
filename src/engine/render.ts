@@ -552,6 +552,9 @@ function boxSize(env: Env, layer: Layer, lt: number, pw: number, ph: number): [n
       const page = captionState(env, layer, lt)
       return page ? [page.layout.w, page.layout.h] : [0, 0]
     }
+    case 'studio':
+      // Expanded into plain layers before rendering (studio.ts); nothing is drawn if it was not.
+      return [0, 0]
     case 'image':
     case 'video': {
       const natural = layer.type === 'image' ? env.res.image(layer.asset) : env.res.videoSize(layer.asset)
@@ -584,11 +587,13 @@ function filterString(layer: Layer, lt: number): string {
   return parts.length ? parts.join(' ') : 'none'
 }
 
+const COMPOSITE: Partial<Record<string, GlobalCompositeOperation>> = { add: 'lighter', atop: 'source-atop', matte: 'destination-in' }
+
 function applyLook(ctx: Ctx2D, layer: Layer, opacity: number, filter: string) {
   ctx.globalAlpha *= opacity
   ctx.filter = filter
   if (layer.blend && layer.blend !== 'normal') {
-    ctx.globalCompositeOperation = layer.blend === 'add' ? 'lighter' : layer.blend
+    ctx.globalCompositeOperation = COMPOSITE[layer.blend] ?? (layer.blend as GlobalCompositeOperation)
   }
 }
 
@@ -659,7 +664,7 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
     heavyBlur ||
     !!layer.shadow ||
     !!layer.grade ||
-    (layer.type === 'group' && (opacity < 1 || fullFilter !== 'none' || (!!layer.blend && layer.blend !== 'normal')))
+    (layer.type === 'group' && (!!layer.isolate || opacity < 1 || fullFilter !== 'none' || (!!layer.blend && layer.blend !== 'normal')))
 
   const outer = env.ctx
   outer.save()

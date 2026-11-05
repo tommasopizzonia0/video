@@ -13,6 +13,7 @@ import { BrowserResources } from './engine/resources'
 import type { Composition } from './engine/types'
 import { validate } from './engine/validate'
 import { applyVariant } from './engine/variants'
+import { expandStudioWith } from './engine/studio'
 import { applyBeatGrid, sceneCuts } from './engine/beatgrid'
 
 interface Session {
@@ -52,6 +53,7 @@ const api = {
     const resolve = (src: string) => overrides[src] ?? new URL(src, base).href
     const res = await BrowserResources.load(comp, resolve)
     if (comp.beats) comp = applyBeatGrid(comp, res.beats(comp.beats.asset) ?? [])
+    comp = expandStudioWith(comp, res)
     const canvas = document.getElementById('stage') as HTMLCanvasElement
     const renderer = new Renderer(canvas, comp, res, { scale })
     session = { comp, res, renderer, canvas }

@@ -37,6 +37,9 @@ Photos or stock video the user did not supply: `npm run photos -- "<english sear
 (add `--video` for clips), look at `provini.jpg`, use only those, and pass `CREDITI.txt` on to the
 user (CC BY files must be credited).
 
+Product photos: put cut-outs (transparent PNG) in a `studio` layer (backdrop, shadows, softbox light,
+reflection, shine, camera push with parallax) instead of placing a bare image; see docs/MOTION.md "Product shots".
+
 Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
 `beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.
 If the confidence it prints is under 0.5, cut by ear instead.

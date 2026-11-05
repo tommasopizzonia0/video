@@ -39,7 +39,8 @@ const layerKeys: Record<string, string[]> = {
   ],
   image: ['asset', 'width', 'height', 'fit', 'radius'],
   video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted'],
-  group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke'],
+  group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke', 'isolate'],
+  studio: ['backdrop', 'products', 'camera', 'move'],
   captions: [
     'words', 'asset', 'mode', 'maxWords', 'maxChars', 'font', 'size', 'weight', 'italic', 'color', 'highlight',
     'uppercase', 'stroke', 'background', 'width', 'letterSpacing', 'lineHeight',
@@ -55,7 +56,7 @@ const sceneKeys = ['id', 'comment', 'duration', 'beats', 'background', 'layers',
 const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
 const blendModes = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
-  'soft-light', 'difference', 'exclusion', 'add',
+  'soft-light', 'difference', 'exclusion', 'add', 'atop', 'matte',
 ]
 
 function distance(a: string, b: string): number {
@@ -323,6 +324,43 @@ export function validate(input: unknown): Issue[] {
         else if (!a) err(`${path}.asset`, `No asset "${l.asset}" in "assets".${suggest(l.asset, Object.keys(assets))}`)
         else if (a.type !== type) err(`${path}.asset`, `Asset "${l.asset}" is a ${a.type}, not a ${type}.`)
         if (l.fit !== undefined && !['cover', 'contain', 'fill'].includes(l.fit as string)) err(`${path}.fit`, 'Must be "cover", "contain" or "fill".')
+        break
+      }
+      case 'studio': {
+        const b = l.backdrop
+        if (b !== undefined) {
+          if (!isObj(b)) err(`${path}.backdrop`, 'Must be { "style", "color", "floor" }.')
+          else {
+            keys(b, ['style', 'color', 'floor'], `${path}.backdrop`)
+            if (b.style !== undefined && !['sweep', 'spot', 'table', 'none'].includes(b.style as string)) err(`${path}.backdrop.style`, 'Must be "sweep", "spot", "table" or "none".')
+            if (b.color !== undefined) checkColor(b.color, `${path}.backdrop.color`)
+            if (b.floor !== undefined && !isNum(b.floor)) err(`${path}.backdrop.floor`, 'Must be px from the top.')
+          }
+        }
+        if (l.camera !== undefined && !['push', 'pull', 'drift', 'rise', 'still'].includes(l.camera as string)) err(`${path}.camera`, 'Must be "push", "pull", "drift", "rise" or "still".')
+        if (l.move !== undefined && !isNum(l.move)) err(`${path}.move`, 'Must be a number (1 = default strength).')
+        if (!Array.isArray(l.products) || !l.products.length) {
+          err(`${path}.products`, 'A studio needs "products": [{ "asset": "<image id>" }].')
+          break
+        }
+        l.products.forEach((p: unknown, i: number) => {
+          const pp = `${path}.products[${i}]`
+          if (!isObj(p)) return err(pp, 'A product is { "asset", "width", "x", "shadow", "light", ... }.')
+          keys(p, ['id', 'asset', 'width', 'x', 'y', 'shadow', 'light', 'lightAmount', 'reflection', 'shine', 'halo', 'float', 'in', 'out'], pp)
+          const a = assets[p.asset as string]
+          if (typeof p.asset !== 'string') err(`${pp}.asset`, 'Must be the id of an image in "assets".')
+          else if (!a) err(`${pp}.asset`, `No asset "${p.asset}" in "assets".${suggest(p.asset, Object.keys(assets))}`)
+          else if (a.type !== 'image') err(`${pp}.asset`, `Asset "${p.asset}" is a ${a.type}, not an image.`)
+          for (const k of ['width', 'x', 'y', 'lightAmount', 'reflection'] as const) if (p[k] !== undefined && !isNum(p[k])) err(`${pp}.${k}`, 'Must be a number.')
+          if (p.shadow !== undefined && !['soft', 'cast', false].includes(p.shadow as string | false)) err(`${pp}.shadow`, 'Must be "soft", "cast" or false.')
+          if (p.light !== undefined && !['left', 'right', 'top', false].includes(p.light as string | false)) err(`${pp}.light`, 'Must be "left", "right", "top" or false.')
+          if (p.shine !== undefined && typeof p.shine !== 'boolean' && !isNum(p.shine)) err(`${pp}.shine`, 'Must be true, false or the second it starts.')
+          if (p.halo !== undefined) checkColor(p.halo, `${pp}.halo`)
+          if (typeof p.asset === 'string' && a?.type === 'image' && !/\.(png|webp|avif|svg)(\?|$)/i.test(a.src))
+            warn(`${pp}.asset`, 'A photo with its own background sits on the set as a rectangle: use a cut-out PNG or WebP with a transparent background.')
+          checkPreset(p.in, `${pp}.in`)
+          checkPreset(p.out, `${pp}.out`)
+        })
         break
       }
       case 'group':

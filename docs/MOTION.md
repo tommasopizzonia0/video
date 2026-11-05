@@ -124,7 +124,7 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
 | `scale`, `scaleX`, `scaleY`, `rotation` (deg), `skewX` (deg), `opacity` | anim | |
 | `blur` (px), `brightness`, `contrast`, `saturate`, `grayscale`, `hueRotate` | anim | filters; big blurs are cheap |
 | `shadow` | `{ color, blur, x, y }` | soft drop shadow from the layer's silhouette |
-| `blend` | `multiply`, `screen`, `overlay`, `soft-light`, `add`, … | |
+| `blend` | `multiply`, `screen`, `overlay`, `soft-light`, `add`, … | `atop`: paint only on the layers below it inside an `isolate` group (a highlight on a product); `matte`: keep those layers only where this one is, with its alpha (a fading reflection) |
 | `in`, `out` | preset | entrance / exit, see below |
 | `start`, `duration`, `hidden`, `id`, `comment` | | |
 
@@ -153,8 +153,11 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
 - **`group`** `layers`, `width`/`height` (default: parent size), `fill`, `stroke`, `radius`, `clip`.
   `mask: { d, viewBox, width, height, x, y, scale, rotation }` clips the children to an SVG shape (x/y/scale/rotation anim):
   animate `scale` from 0 to well past the frame for a shape reveal (a leaf opening onto the next shot).
+  `isolate: true` draws the children on their own first, so `atop` / `matte` act on them alone.
   A group with `fill` + `radius` + `shadow` is a card. Animate a group to move everything in it
   (a "camera": scale/x/y keyframes on a full-frame group).
+- **`studio`** a product shot from photos: a set, products standing on it with shadows and studio light,
+  and a camera move with parallax (the products move more than the set behind them). See "Product shots" below.
 - **`captions`** word-timed subtitles in the social style: short pages of 1–3 words, the spoken word
   lit up. `words: [{ text, start, end }]` (seconds in the layer's time) or `asset` pointing to a
   `"type": "captions"` asset: an `.srt` / `.vtt` file or JSON (Whisper or whisper.cpp output with word
@@ -277,6 +280,38 @@ hand from the site; 3D models would also need a 3D renderer, which the engine do
 A licence covers the copyright of the file, not recognizable people or trademarks in it: an ad
 needs their consent, so prefer pictures without faces and logos. Wikimedia's `personality` and
 `trademarked` warnings end up in `CREDITI.txt`.
+
+## Product shots (`studio` layer)
+
+Turns product photos into a studio shot. Best with **cut-outs** (PNG/WebP with a transparent
+background): their transparent margins are measured, so the product itself stands on the floor at
+the width you ask. A photo with its own background sits on the set as a rectangle (the checker warns).
+
+```json
+{ "type": "studio",
+  "backdrop": { "style": "sweep", "color": "#e8e2d6" },
+  "camera": "push",
+  "products": [{ "asset": "vaso", "width": 520, "shadow": "cast", "light": "left", "shine": 0.8 }] }
+```
+
+- `backdrop.style`: `sweep` (seamless paper, wall into floor, default), `spot` (a pool of light on a
+  darker set), `table` (a wall and a table top), `none` (keep your own background or video).
+  `color` (default warm white), `floor` (px from the top where products stand, default 74% of the height).
+- `camera`: `push` (default, slow move in), `pull`, `drift` (sideways), `rise`, `still`; `move` scales it (1 = default).
+  It lasts the whole layer; the set moves about a third as much as the products.
+- products: `asset`, `width` (of the product itself, px), `x`, `y` (base, default the floor; one
+  product is centered, several are spread out), `id`, `in`/`out` presets, and
+  - `shadow`: `soft` (contact + soft ground shadow, default), `cast` (also a long shadow away from the light), `false`
+  - `light`: `left` (default), `right`, `top` or `false`: a softbox highlight near that edge and shade on
+    the other, painted only on the product; `lightAmount` 0..1 (0.6)
+  - `reflection`: 0..1, a mirror image on a glossy floor
+  - `shine`: a band of light crossing the product, starting at that second (`true` = 0.5 s)
+  - `halo`: a color glowing behind the product
+  - `float`: a slow up-and-down, the shadow breathing with it
+
+Put titles, price and CTA as normal layers above it. Limits: this is 2D: the light is painted on, not
+computed from the product's shape, so it reads best on simple objects (bottles, boxes, pots); on
+foliage `shine` looks like mist. A cut-out with leftover edges or its own baked shadow shows them.
 
 ## Color grade
 

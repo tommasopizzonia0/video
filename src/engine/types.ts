@@ -117,6 +117,10 @@ export type BlendMode =
   | 'difference'
   | 'exclusion'
   | 'add'
+  /** Paints only where the layers below in the same isolated group are (a highlight on a product). */
+  | 'atop'
+  /** Keeps the layers below only where this layer is, with its alpha (a fading reflection). */
+  | 'matte'
 
 export interface LayerBase {
   type: string
@@ -328,6 +332,8 @@ export interface GroupLayer extends LayerBase {
   radius?: Anim<number>
   fill?: Fill
   stroke?: Stroke
+  /** Draw the children on their own before compositing, so "atop" and "matte" act on them alone. */
+  isolate?: boolean
 }
 
 export interface GroupMask {
@@ -383,7 +389,58 @@ export interface CaptionsLayer extends LayerBase {
   lineHeight?: number
 }
 
-export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer | CaptionsLayer
+export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer | CaptionsLayer | StudioLayer
+
+/** One product on a studio set. */
+export interface StudioProduct {
+  id?: string
+  /** An image asset, best a cut-out PNG with a transparent background. */
+  asset: string
+  /** Width of the product itself in px (transparent margins of a cut-out are measured and left out). */
+  width?: number
+  /** Center of the product, px from the left. */
+  x?: number
+  /** Where its base stands, px from the top (default: the studio floor). */
+  y?: number
+  /** Ground shadow: "soft" (default), "cast" (also a long shadow away from the light) or false. */
+  shadow?: 'soft' | 'cast' | false
+  /** Side of the softbox highlight (default "left"), or false. */
+  light?: 'left' | 'right' | 'top' | false
+  /** Strength of the highlight and shading, 0..1 (default 0.6). */
+  lightAmount?: number
+  /** Mirror image on a glossy floor, its opacity 0..1 (default 0: none). */
+  reflection?: number
+  /** A band of light crossing the product, starting this many seconds in (or true: 0.5 s). */
+  shine?: number | boolean
+  /** Color of a glow behind the product. */
+  halo?: string
+  /** Gentle floating up and down, the shadow breathing with it. */
+  float?: boolean
+  in?: Preset
+  out?: Preset
+}
+
+export interface StudioBackdrop {
+  /** "sweep": seamless paper, wall into floor; "spot": a pool of light on a darker set; "table": a table top and a wall; "none": no set. */
+  style?: 'sweep' | 'spot' | 'table' | 'none'
+  color?: string
+  /** Floor line where products stand, px from the top (default 74% of the frame height). */
+  floor?: number
+}
+
+/**
+ * A product shot from photos: backdrop, products with shadows, highlights and reflections, and a
+ * camera move with parallax. Expanded into plain layers before rendering (see studio.ts).
+ */
+export interface StudioLayer extends LayerBase {
+  type: 'studio'
+  backdrop?: StudioBackdrop
+  products: StudioProduct[]
+  /** Camera move over the layer's duration (default "push"). */
+  camera?: 'push' | 'pull' | 'drift' | 'rise' | 'still'
+  /** Strength of the camera move (1 = default). */
+  move?: number
+}
 
 export type TransitionType =
   | 'cut'
