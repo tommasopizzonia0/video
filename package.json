@@ -12,7 +12,8 @@
     "render": "node scripts/render.mjs",
     "build:artifact": "vite build --mode artifact",
     "transcribe": "node scripts/transcribe.mjs",
-    "beats": "node scripts/beats.mjs"
+    "beats": "node scripts/beats.mjs",
+    "prep": "node scripts/prep.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",

@@ -203,6 +203,28 @@ Only one scene is on screen at any frame, never a dissolve. Their curves are bui
 - `flash` (0.34 s): a hard cut hidden in a flash of `color` (white by default), for beats and drops.
 - `whip` (0.36 s): a fast pan well past the screen with a directional smear.
 
+## Preparing clips
+
+`npm run prep -- clip.mp4` measures a clip before it goes in a comp: how much the picture shakes
+(after removing the intended camera move), the background noise of the sound, and mains hum. It
+suggests the options to use. With options it writes `clip-prep.mp4` and measures it again:
+
+- `--stabilize`: vid.stab in two passes, keeping the camera move of the last `--smooth` seconds
+  (default 1). The picture is enlarged just enough to hide the moving edges; the report says up to
+  how much (an upper estimate). Over ~10% you lose visible sharpness: reshoot if you can.
+  `--tripod` instead holds the frame still, for shots meant to be locked off.
+- `--grain light|strong`: non-local means against sensor noise and grain. Slow, about 0.5–1 s per
+  1080p frame.
+- `--denoise`: high-pass at 80 Hz and an FFT denoiser that follows the noise (hiss, fans, room).
+  The 25 ms the filter adds is taken back, so lips stay in sync.
+- `--hum [50|60]`: notches on the mains frequency and its harmonics; found automatically when no
+  frequency is given.
+
+What it cannot do: motion blur and rolling-shutter wobble stay (they are in each frame); a shot out
+of focus stays out of focus; `--denoise` lowers the noise in the pauses by 3–10 dB (less when the noise is loud) but cannot
+pull a voice out of loud noise, and it does not help transcription, so run `npm run transcribe`
+on the original sound.
+
 ## Color grade
 
 `grade` on the comp colors the whole picture (the scenes; the top-level `layers`, such as captions and

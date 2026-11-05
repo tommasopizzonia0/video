@@ -35,4 +35,4 @@ console.log(`${a.bpm} BPM, ${a.beats.length} beat, affidabilità ${a.confidence}
 console.log(`primi beat: ${a.beats.slice(0, 8).map((b) => b.toFixed(2)).join(' ')}`)
 console.log(`inizio battute (beat n.): ${a.downbeats.slice(0, 8).join(' ')}${a.downbeats.length > 8 ? ' …' : ''}`)
 if (a.hits.length) console.log(`stacchi forti (beat n. → secondi): ${a.hits.map((i) => `${i} → ${a.beats[i].toFixed(2)}`).join(', ')}`)
-if (a.confidence < 0.3) console.log('attenzione: il ritmo è poco regolare, i beat sono stime')
+if (a.confidence < 0.5) console.log('attenzione: il ritmo è poco regolare, i beat sono stime')
