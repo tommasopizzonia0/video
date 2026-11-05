@@ -215,15 +215,20 @@ suggests the options to use. With options it writes `clip-prep.mp4` and measures
   `--tripod` instead holds the frame still, for shots meant to be locked off.
 - `--grain light|strong`: non-local means against sensor noise and grain. Slow, about 0.5–1 s per
   1080p frame.
-- `--denoise`: high-pass at 80 Hz and an FFT denoiser that follows the noise (hiss, fans, room).
-  The 25 ms the filter adds is taken back, so lips stay in sync.
+- `--denoise [voice|fft]`: `voice` (default) is RNNoise, a small neural network trained on speech
+  (`scripts/models/rnnoise-voce.rnnn`, BSD licence, see `rnnoise-COPYING.txt`): on a voice with loud
+  noise it lowers the noise in the pauses by about 20 dB, against 3 dB for the classic filter, and
+  keeps the timbre closest to the clean voice. It treats everything that is not speech as noise, so
+  use `fft` (high-pass + spectral filter that follows the noise) for ambience, music or nature
+  sounds. The delay of each filter is taken back, so lips stay in sync.
 - `--hum [50|60]`: notches on the mains frequency and its harmonics; found automatically when no
   frequency is given.
 
 What it cannot do: motion blur and rolling-shutter wobble stay (they are in each frame); a shot out
-of focus stays out of focus; `--denoise` lowers the noise in the pauses by 3–10 dB (less when the noise is loud) but cannot
-pull a voice out of loud noise, and it does not help transcription, so run `npm run transcribe`
-on the original sound.
+of focus stays out of focus; `--denoise` cleans the pauses well but the noise under the words stays in part, and neither filter
+helps transcription (Whisper does slightly worse on cleaned sound), so run `npm run transcribe`
+on the original sound. Listen to the result: a recording made close to the mouth in a quiet room
+still beats any cleanup.
 
 ## Color grade
 

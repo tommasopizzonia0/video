@@ -10,20 +10,24 @@
 //   --tripod           as if the camera were locked off (for shots meant to be still)
 //   --smooth <s>       seconds of camera move kept by --stabilize (default 1; more = steadier, floatier)
 //   --grain <light|strong>  remove video noise/grain (non-local means: good but slow)
-//   --denoise          lower the background noise of the sound (hiss, fan, room)
+//   --denoise [voice|fft]  lower the background noise: `voice` (default) is RNNoise, a small neural
+//                      network trained on speech (scripts/models, BSD licence), much stronger on a
+//                      voice but it also removes non-speech sounds; `fft` is a classic spectral
+//                      filter for ambience, music or nature sounds
 //   --hum [50|60]      remove mains hum (found automatically when no frequency is given)
 //   -o <file>          output (default: <clip>-prep.mp4)
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { extname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { globalMotion, measureNoise, measureShake, parseTrf } from '../src/engine/prep.ts'
 
 const args = process.argv.slice(2)
-const input = args[0]
+const input = args[0] && resolve(args[0])
 if (!input || input.startsWith('-') || !existsSync(input)) {
-  console.error('usage: npm run prep -- <clip> [--stabilize] [--tripod] [--smooth <s>] [--grain light|strong] [--denoise] [--hum [50|60]] [-o out.mp4]')
+  console.error('usage: npm run prep -- <clip> [--stabilize] [--tripod] [--smooth <s>] [--grain light|strong] [--denoise [voice|fft]] [--hum [50|60]] [-o out.mp4]')
   process.exit(1)
 }
 const has = (f) => args.includes(f)
@@ -35,7 +39,11 @@ const stabilize = has('--stabilize') || has('--tripod')
 const tripod = has('--tripod')
 const smoothSec = Number(value('--smooth') ?? 1)
 const grain = has('--grain') ? (value('--grain') ?? 'light') : undefined
-const denoise = has('--denoise')
+const denoise = has('--denoise') ? (value('--denoise') ?? 'voice') : undefined
+if (denoise && !['voice', 'fft'].includes(denoise)) {
+  console.error('--denoise: voice o fft')
+  process.exit(1)
+}
 const humArg = has('--hum') ? Number(value('--hum') ?? 0) : undefined
 if (grain && !['light', 'strong'].includes(grain)) {
   console.error('--grain: light o strong')
@@ -114,7 +122,7 @@ if (!fixing) {
 const vf = []
 if (stabilize && info.video) {
   const smoothing = Math.max(1, Math.round(info.fps * smoothSec))
-  vf.push(`vidstabtransform=input=${trf}:${tripod ? 'tripod=1' : `smoothing=${smoothing}`}:optzoom=1:interpol=bicubic`, 'unsharp=5:5:0.4:3:3:0')
+  vf.push(`vidstabtransform=input=motion.trf:${tripod ? 'tripod=1' : `smoothing=${smoothing}`}:optzoom=1:interpol=bicubic`, 'unsharp=5:5:0.4:3:3:0')
   if (before.shake.zoom > 10 && !tripod) console.log(`attenzione: serve un ingrandimento del ${before.shake.zoom}%, si perde definizione`)
 }
 if (grain && info.video) vf.push(grain === 'strong' ? 'nlmeans=s=9:p=7:r=11' : 'nlmeans=s=6:p=7:r=9')
@@ -124,8 +132,12 @@ const hum = humArg === undefined ? 0 : humArg || before.noise?.hum || 0
 if (humArg !== undefined && !hum) console.log('ronzio non trovato: --hum ignorato (indica 50 o 60 per forzarlo)')
 if (hum && info.audio) for (const h of [1, 2, 3, 4]) af.push(`bandreject=f=${hum * h}:width_type=q:w=30`)
 if (denoise && info.audio) {
-  // afftdn delays the sound by 25 ms: take it back so lips stay in sync.
-  af.push('highpass=f=80', 'afftdn=nr=20:nf=-30:tn=1', 'atrim=start=0.025', 'asetpts=PTS-STARTPTS', `apad=whole_dur=${info.duration}`)
+  // Both filters delay the sound (RNNoise 10 ms, afftdn 25 ms): take it back so lips stay in sync.
+  if (denoise === 'voice') {
+    copyFileSync(join(dirname(fileURLToPath(import.meta.url)), 'models', 'rnnoise-voce.rnnn'), join(tmp, 'voce.rnnn'))
+    af.push('highpass=f=80', 'arnndn=m=voce.rnnn', 'atrim=start=0.010')
+  } else af.push('highpass=f=80', 'afftdn=nr=20:nf=-30:tn=1', 'atrim=start=0.025')
+  af.push('asetpts=PTS-STARTPTS', `apad=whole_dur=${info.duration}`)
 }
 
 const argv = ['-nostdin', '-v', 'error', '-stats', '-y', '-i', input]
@@ -135,7 +147,8 @@ if (af.length) argv.push('-af', af.join(','), '-c:a', 'aac', '-b:a', '192k', '-a
 else argv.push('-c:a', 'copy')
 argv.push('-movflags', '+faststart', '-shortest', out)
 if (grain) console.log('riduzione della grana: è lenta (circa 0,5–1 s per fotogramma a 1080p)')
-run('ffmpeg', argv, { stdio: ['ignore', 'inherit', 'pipe'] })
+// Run inside the temp folder so filter arguments are plain file names (no drive letters to escape).
+run('ffmpeg', argv, { stdio: ['ignore', 'inherit', 'pipe'], cwd: tmp })
 
 const after = analyze(out, probe(out), join(tmp, 'after.trf'))
 console.log(`\n${out}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`)

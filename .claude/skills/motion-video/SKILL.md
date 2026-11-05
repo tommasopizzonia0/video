@@ -31,7 +31,7 @@ Voice: `npm run transcribe -- voce.mp3 [--prompt "brand names"]` → `voce.words
 asset; read the "parole incerte" it lists and fix them in the JSON before rendering.
 
 Footage: run `npm run prep -- clip.mp4` on every shot first and apply what it suggests
-(`--stabilize`, `--denoise`, `--hum`); tell the user what it cannot fix instead of hiding it.
+(`--stabilize`, `--denoise` for voice, `--denoise fft` for ambience or music, `--hum`); tell the user what it cannot fix instead of hiding it.
 
 Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
 `beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.
