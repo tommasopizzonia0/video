@@ -163,8 +163,12 @@ Springs settle exactly at the end of their segment. Default between keyframes: `
   `maxChars` (22), `font`, `size` (default 72 on 1080), `weight` (800), `italic`, `color`, `uppercase`,
   `stroke` (black outline by default, `false` for none), `background` (a pill behind the page),
   `width` (wrap width, default 80% of the frame), `letterSpacing`, `lineHeight`. Default position: centered at 58% of the height on 9:16 (above the 35% that ads cover with the caption and the button), 70% on other vertical shapes, 84% on horizontal ones.
-  Put it in the top-level `layers` so it runs across scenes. Word timings come from a transcription,
-  for example `whisper audio.mp3 --word_timestamps True --output_format json`.
+  Put it in the top-level `layers` so it runs across scenes. Word timings come from a transcription: `npm run transcribe -- voce.mp3` writes
+  `voce.words.json` (faster-whisper large-v3-turbo, Italian by default, `--language auto` to detect,
+  `--prompt "Statera, ilvivaioonline.it"` for names to spell right). Word starts after a pause are
+  moved to where the voice comes back, Italian elisions stay one word (`d'agosto`), and words the
+  model is unsure of are listed so you can check them by ear. Needs Python with `pip install faster-whisper`
+  (set `WHISPER_PYTHON` to use a virtualenv); the model (1.6 GB) downloads from Hugging Face the first time.
 
 **Fills** are a color (`"#16b07a"`, `"rgba(0,0,0,.5)"`, `"hsl(...)"`) or a gradient:
 `{ "type": "linear", "angle": 135, "stops": [[0, "#7c5cff"], [1, "#2563eb"]] }` (CSS angles) or

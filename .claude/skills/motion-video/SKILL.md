@@ -27,6 +27,9 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
 6. Deliver the MP4 plus a poster frame (`--still`), and keep the JSON so the video can be edited
    later in the browser (Motion view, `#motion`).
 
+Voice: `npm run transcribe -- voce.mp3 [--prompt "brand names"]` → `voce.words.json` for a `captions`
+asset; read the "parole incerte" it lists and fix them in the JSON before rendering.
+
 Color: give footage from different sources a per-layer `grade` so they match, then one comp `grade`
 for the look (subtle: contrast 1.1–1.2, saturation 1.05–1.15, warm highlights or a LUT at 60–80%).
 
