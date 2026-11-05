@@ -215,12 +215,21 @@ suggests the options to use. With options it writes `clip-prep.mp4` and measures
   `--tripod` instead holds the frame still, for shots meant to be locked off.
 - `--grain light|strong`: non-local means against sensor noise and grain. Slow, about 0.5–1 s per
   1080p frame.
-- `--denoise [voice|fft]`: `voice` (default) is RNNoise, a small neural network trained on speech
-  (`scripts/models/rnnoise-voce.rnnn`, BSD licence, see `rnnoise-COPYING.txt`): on a voice with loud
-  noise it lowers the noise in the pauses by about 20 dB, against 3 dB for the classic filter, and
-  keeps the timbre closest to the clean voice. It treats everything that is not speech as noise, so
-  use `fft` (high-pass + spectral filter that follows the noise) for ambience, music or nature
-  sounds. The delay of each filter is taken back, so lips stay in sync.
+- `--denoise [deep|voice|fft]`: lowers the background noise. The delay of each filter is taken
+  back, so lips stay in sync.
+  - `deep` (default when installed): DeepFilterNet 3, a neural network trained on speech (MIT /
+    Apache-2.0). The most natural result, and the only one that also cleans *under the words*: in
+    our tests the voice went from 6.6 to 13.7 dB above the noise there (RNNoise 7.4, fft 7.8). It needs the `deep-filter` program,
+    one file with the model inside, no Python: download it for your system from
+    https://github.com/Rikorose/DeepFilterNet/releases (the `deep-filter-…` file for your system,
+    e.g. `deep-filter-0.5.6-x86_64-pc-windows-msvc.exe` on Windows), and put it on the PATH as
+    `deep-filter` or point `DEEP_FILTER` at it. About 20 s per minute of sound on the cloud CPU.
+  - `--keep <dB>` with `deep`: limits the reduction (e.g. `--keep 20`), leaving a little room sound;
+    often more natural than total silence between the words.
+  - `voice`: RNNoise (`scripts/models/rnnoise-voce.rnnn`, BSD, see `rnnoise-COPYING.txt`), the
+    fallback when `deep-filter` is missing. Lighter, but it can sound metallic.
+  - `fft`: high-pass + a spectral filter that follows the noise, for ambience, music or nature
+    sounds: `deep` and `voice` treat everything that is not speech as noise.
 - `--hum [50|60]`: notches on the mains frequency and its harmonics; found automatically when no
   frequency is given.
 

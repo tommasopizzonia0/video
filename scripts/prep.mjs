@@ -10,10 +10,14 @@
 //   --tripod           as if the camera were locked off (for shots meant to be still)
 //   --smooth <s>       seconds of camera move kept by --stabilize (default 1; more = steadier, floatier)
 //   --grain <light|strong>  remove video noise/grain (non-local means: good but slow)
-//   --denoise [voice|fft]  lower the background noise: `voice` (default) is RNNoise, a small neural
-//                      network trained on speech (scripts/models, BSD licence), much stronger on a
-//                      voice but it also removes non-speech sounds; `fft` is a classic spectral
-//                      filter for ambience, music or nature sounds
+//   --denoise [deep|voice|fft]  lower the background noise:
+//                      deep (default when installed): DeepFilterNet, a neural network trained on
+//                        speech, the most natural; needs the `deep-filter` program (see docs/MOTION.md)
+//                      voice: RNNoise (scripts/models, BSD licence), lighter, can sound metallic
+//                      fft: classic spectral filter, for ambience, music or nature sounds
+//                      deep and voice treat everything that is not speech as noise
+//   --keep <dB>        with deep: at most this much noise reduction (e.g. 20), leaving a little
+//                      room sound for a more natural result (default: no limit)
 //   --hum [50|60]      remove mains hum (found automatically when no frequency is given)
 //   -o <file>          output (default: <clip>-prep.mp4)
 
@@ -27,7 +31,7 @@ import { globalMotion, measureNoise, measureShake, parseTrf } from '../src/engin
 const args = process.argv.slice(2)
 const input = args[0] && resolve(args[0])
 if (!input || input.startsWith('-') || !existsSync(input)) {
-  console.error('usage: npm run prep -- <clip> [--stabilize] [--tripod] [--smooth <s>] [--grain light|strong] [--denoise [voice|fft]] [--hum [50|60]] [-o out.mp4]')
+  console.error('usage: npm run prep -- <clip> [--stabilize] [--tripod] [--smooth <s>] [--grain light|strong] [--denoise [deep|voice|fft]] [--keep <dB>] [--hum [50|60]] [-o out.mp4]')
   process.exit(1)
 }
 const has = (f) => args.includes(f)
@@ -39,11 +43,22 @@ const stabilize = has('--stabilize') || has('--tripod')
 const tripod = has('--tripod')
 const smoothSec = Number(value('--smooth') ?? 1)
 const grain = has('--grain') ? (value('--grain') ?? 'light') : undefined
-const denoise = has('--denoise') ? (value('--denoise') ?? 'voice') : undefined
-if (denoise && !['voice', 'fft'].includes(denoise)) {
-  console.error('--denoise: voice o fft')
+const deepFilter = process.env.DEEP_FILTER || 'deep-filter'
+const hasDeep = () => spawnSync(deepFilter, ['--version']).status === 0
+let denoise = has('--denoise') ? value('--denoise') : undefined
+if (has('--denoise') && !denoise) {
+  denoise = hasDeep() ? 'deep' : 'voice'
+  if (denoise === 'voice') console.log('DeepFilterNet non trovato (deep-filter): uso RNNoise, più metallico; vedi docs/MOTION.md per installarlo')
+}
+if (denoise && !['deep', 'voice', 'fft'].includes(denoise)) {
+  console.error('--denoise: deep, voice o fft')
   process.exit(1)
 }
+if (denoise === 'deep' && !hasDeep()) {
+  console.error(`non trovo ${deepFilter}: scaricalo da github.com/Rikorose/DeepFilterNet/releases o imposta DEEP_FILTER`)
+  process.exit(1)
+}
+const keep = value('--keep')
 const humArg = has('--hum') ? Number(value('--hum') ?? 0) : undefined
 if (grain && !['light', 'strong'].includes(grain)) {
   console.error('--grain: light o strong')
@@ -131,7 +146,16 @@ const af = []
 const hum = humArg === undefined ? 0 : humArg || before.noise?.hum || 0
 if (humArg !== undefined && !hum) console.log('ronzio non trovato: --hum ignorato (indica 50 o 60 per forzarlo)')
 if (hum && info.audio) for (const h of [1, 2, 3, 4]) af.push(`bandreject=f=${hum * h}:width_type=q:w=30`)
-if (denoise && info.audio) {
+let cleanWav
+if (denoise === 'deep' && info.audio) {
+  // DeepFilterNet works on a WAV at 48 kHz: hum out first (when asked), then the network, which
+  // handles rumble itself (-D takes back its delay); the result replaces the sound of the clip.
+  const pre = af.length ? ['-af', af.join(',')] : []
+  af.length = 0
+  run('ffmpeg', ['-nostdin', '-v', 'error', '-y', '-i', input, '-vn', ...pre, '-ar', '48000', '-c:a', 'pcm_s16le', join(tmp, 'voce.wav')])
+  run(deepFilter, ['-D', ...(keep ? ['-a', String(Number(keep))] : []), '-o', join(tmp, 'pulita'), join(tmp, 'voce.wav')])
+  cleanWav = join(tmp, 'pulita', 'voce.wav')
+} else if (denoise && info.audio) {
   // Both filters delay the sound (RNNoise 10 ms, afftdn 25 ms): take it back so lips stay in sync.
   if (denoise === 'voice') {
     copyFileSync(join(dirname(fileURLToPath(import.meta.url)), 'models', 'rnnoise-voce.rnnn'), join(tmp, 'voce.rnnn'))
@@ -141,9 +165,11 @@ if (denoise && info.audio) {
 }
 
 const argv = ['-nostdin', '-v', 'error', '-stats', '-y', '-i', input]
+if (cleanWav) argv.push('-i', cleanWav, '-map', '0:v?', '-map', '1:a')
 if (vf.length) argv.push('-vf', vf.join(','), '-c:v', 'libx264', '-crf', '16', '-preset', 'medium', '-pix_fmt', 'yuv420p')
 else argv.push('-c:v', 'copy')
-if (af.length) argv.push('-af', af.join(','), '-c:a', 'aac', '-b:a', '192k', '-ar', '48000')
+if (cleanWav) argv.push('-c:a', 'aac', '-b:a', '192k')
+else if (af.length) argv.push('-af', af.join(','), '-c:a', 'aac', '-b:a', '192k', '-ar', '48000')
 else argv.push('-c:a', 'copy')
 argv.push('-movflags', '+faststart', '-shortest', out)
 if (grain) console.log('riduzione della grana: è lenta (circa 0,5–1 s per fotogramma a 1080p)')
