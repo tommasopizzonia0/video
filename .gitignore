@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 examples/*.mp4
 examples/*.png
+dist-artifact

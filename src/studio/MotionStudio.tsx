@@ -8,6 +8,7 @@ import { BrowserResources } from '../engine/resources'
 import { sceneStarts } from '../engine/timeline'
 import type { Composition } from '../engine/types'
 import { parseComposition, type Issue } from '../engine/validate'
+import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type LiveUpdate } from './live'
 import { formatTime } from '../timeline'
 
 const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })
@@ -31,12 +32,16 @@ function loadSaved(): string {
   return EXAMPLES[0]?.text ?? '{\n  "width": 1080,\n  "height": 1920,\n  "scenes": []\n}'
 }
 
-export function MotionStudio() {
+/** `live`: follow the composition Claude is editing (when running as a claude.ai Artifact). */
+export function MotionStudio({ live = false }: { live?: boolean }) {
   const [text, setText] = useState(loadSaved)
   const [files, setFiles] = useState<Map<string, File>>(new Map())
   const [time, setTime] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
+  const [liveState, setLiveState] = useState<{ connected: boolean; note?: string; follow: boolean }>({ connected: false, follow: true })
+  const followRef = useRef(true)
+  const liveUpdate = useRef<LiveUpdate | null>(null)
   // Errors are tied to the composition they came from, so editing clears them.
   const [failure, setFailure] = useState<{ comp: Composition | null; message: string } | null>(null)
   const [exporting, setExporting] = useState<number | null>(null)
@@ -154,6 +159,40 @@ export function MotionStudio() {
     setPlaying(false)
   }, [])
 
+  // Live: Claude's edits replace the JSON as they arrive, and can jump to the part being changed.
+  useEffect(() => {
+    if (!live) return
+    let unsubscribe: (() => void) | null = null
+    let cancelled = false
+    void connectLive((u) => {
+      liveUpdate.current = u
+      setLiveState((s) => ({ ...s, connected: true, note: u.note }))
+      if (!followRef.current) return
+      setText(u.json)
+      if (u.time !== undefined) {
+        stop()
+        setTime(u.time)
+      }
+    }).then((off) => {
+      if (cancelled) off?.()
+      else {
+        unsubscribe = off
+        if (off) setLiveState((s) => ({ ...s, connected: true }))
+      }
+    })
+    return () => {
+      cancelled = true
+      unsubscribe?.()
+    }
+  }, [live, stop])
+
+  const setFollow = (follow: boolean) => {
+    followRef.current = follow
+    setLiveState((s) => ({ ...s, follow }))
+    const u = liveUpdate.current
+    if (follow && u) setText(u.json)
+  }
+
   const play = useCallback(async () => {
     if (!session || playback.current) return
     const from = timeRef.current >= duration - 0.05 ? 0 : timeRef.current
@@ -203,16 +242,64 @@ export function MotionStudio() {
     return () => window.removeEventListener('keydown', onKey)
   }, [play, stop, session, duration])
 
+  // Files shared on the live page: fetched once and used like dropped files.
+  useEffect(() => {
+    if (!live) return
+    let off: (() => void) | null = null
+    let cancelled = false
+    const fetched = new Set<string>()
+    void watchLiveFiles((list) => {
+      for (const f of list) {
+        if (fetched.has(f.id)) continue
+        fetched.add(f.id)
+        void fetch(f.url)
+          .then((r) => r.blob())
+          .then((blob) => {
+            if (cancelled) return
+            setFiles((prev) => new Map(prev).set(f.name, new File([blob], f.name)))
+          })
+      }
+    }).then((unsubscribe) => {
+      if (cancelled) unsubscribe?.()
+      else off = unsubscribe
+    })
+    return () => {
+      cancelled = true
+      off?.()
+    }
+  }, [live])
+
   const addFiles = (list: FileList | File[]) => {
     const jsons = Array.from(list).filter((f) => f.name.endsWith('.json'))
     const media = Array.from(list).filter((f) => !f.name.endsWith('.json'))
-    if (media.length)
+    if (media.length) {
       setFiles((prev) => {
         const next = new Map(prev)
         for (const f of media) next.set(f.name, f)
         return next
       })
+      // On the live page the files are also shared with Claude.
+      if (live) {
+        setStatus(`Invio ${media.length === 1 ? media[0].name : `${media.length} file`} a Claude…`)
+        uploadLiveFiles(media)
+          .then(() => setStatus(null))
+          .catch((e) => {
+            setStatus(null)
+            setFailure({ comp, message: `Invio non riuscito: ${e?.message ?? String(e)}` })
+          })
+      }
+    }
     if (jsons[0]) void jsons[0].text().then(setText)
+  }
+
+  /** Hands a file to the user: through the Artifact viewer when live, a plain download otherwise. */
+  const offerFile = async (filename: string, blob: Blob) => {
+    if (live && (await saveLiveFile(filename, blob).catch(() => false))) return
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
   }
 
   const exportMp4 = async () => {
@@ -221,11 +308,7 @@ export function MotionStudio() {
     setExporting(0)
     try {
       const { blob, extension } = await exportVideo(session.comp, session.res, { onProgress: setExporting })
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `motion.${extension}`
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+      await offerFile(`motion.${extension}`, blob)
     } catch (e) {
       setFailure({ comp: session.comp, message: `Export non riuscito: ${e instanceof Error ? e.message : String(e)}` })
     } finally {
@@ -234,12 +317,23 @@ export function MotionStudio() {
     }
   }
 
-  const downloadJson = () => {
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(new Blob([text], { type: 'application/json' }))
-    a.download = 'composizione.json'
-    a.click()
-    setTimeout(() => URL.revokeObjectURL(a.href), 10_000)
+  const downloadJson = () => void offerFile('composizione.json', new Blob([text], { type: 'application/json' }))
+
+  // Messages to Claude, tagged with the moment of the video being looked at.
+  const stageRef = useRef<HTMLDivElement>(null)
+  const [message, setMessage] = useState('')
+  const [sendState, setSendState] = useState<'idle' | 'sending' | 'sent' | 'unavailable'>('idle')
+  const send = async () => {
+    const body = message.trim()
+    if (!body || !stageRef.current) return
+    setSendState('sending')
+    try {
+      const ok = await sendToClaude(stageRef.current, `[al secondo ${time.toFixed(1)}] ${body}`)
+      setSendState(ok ? 'sent' : 'unavailable')
+      if (ok) setMessage('')
+    } catch {
+      setSendState('unavailable')
+    }
   }
 
   const scenes = useMemo(() => {
@@ -267,11 +361,24 @@ export function MotionStudio() {
       <header className="topbar">
         <div className="brand">
           <span className="logo">✦</span> Motion
-          <a className="mode-link" href="#">
-            ← Editor
-          </a>
+          {!live && (
+            <a className="mode-link" href="#">
+              ← Editor
+            </a>
+          )}
+          {live && (
+            <span className={`live-badge${liveState.connected ? ' on' : ''}`} title={liveState.note}>
+              <i /> {liveState.connected ? (liveState.note ?? 'In diretta con Claude') : 'In attesa di Claude…'}
+            </span>
+          )}
         </div>
         <div className="topbar-actions">
+          {live && (
+            <label className="field-inline" title="Quando è attivo, le modifiche di Claude sostituiscono il JSON">
+              <input type="checkbox" checked={liveState.follow} onChange={(e) => setFollow(e.target.checked)} />
+              Segui Claude
+            </label>
+          )}
           <label className="field-inline">
             Esempio
             <select value="" onChange={(e) => e.target.value && setText(EXAMPLES.find((x) => x.name === e.target.value)!.text)}>
@@ -332,7 +439,7 @@ export function MotionStudio() {
             {loadError}
           </div>
         )}
-        <div className="stage">
+        <div className="stage" ref={stageRef}>
           <canvas ref={canvasRef} />
           {status && <div className="stage-empty">{status}</div>}
         </div>
@@ -370,6 +477,29 @@ export function MotionStudio() {
               </button>
             ))}
           </div>
+        )}
+        {live && (
+          <form
+            className="ask"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void send()
+            }}
+          >
+            <input
+              value={message}
+              onChange={(e) => {
+                setMessage(e.target.value)
+                if (sendState !== 'sending') setSendState('idle')
+              }}
+              placeholder={`Scrivi a Claude cosa cambiare (al secondo ${time.toFixed(1)})`}
+            />
+            <button className="primary" disabled={!message.trim() || sendState === 'sending'}>
+              {sendState === 'sending' ? 'Invio…' : 'Invia a Claude'}
+            </button>
+            {sendState === 'sent' && <span className="ask-note">Inviato ✓ Claude risponde nei commenti.</span>}
+            {sendState === 'unavailable' && <span className="ask-note">Non riesco a inviarlo da qui: usa i commenti della pagina.</span>}
+          </form>
         )}
       </main>
 
