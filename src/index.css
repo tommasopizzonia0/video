@@ -269,6 +269,30 @@ h3 {
   border-radius: 6px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
 }
+.safe-zone {
+  position: absolute;
+  pointer-events: none;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.safe-shade {
+  position: absolute;
+  background: repeating-linear-gradient(135deg, rgba(255, 70, 70, 0.22) 0 8px, rgba(255, 70, 70, 0.1) 8px 16px);
+}
+.safe-frame {
+  position: absolute;
+  outline: 1px dashed rgba(255, 220, 90, 0.85);
+}
+.safe-label {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  font-size: 11px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
 .stage-empty {
   position: absolute;
   inset: 0;

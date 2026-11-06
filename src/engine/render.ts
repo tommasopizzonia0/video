@@ -15,11 +15,13 @@ import {
 import { activeScenes, compDuration, layerWindow } from './timeline'
 import { shapedTransition, type Pose } from './transitions'
 import { captionPages, pageAt, type CaptionPage } from './captions'
+import { applyLutCpu, bakeGrade, isIdentityGrade, LutPass, type Lut } from './grade'
 import type {
   CaptionWord,
   CaptionsLayer,
   Composition,
   Fill,
+  Grade,
   GroupLayer,
   GroupMask,
   ImageLayer,
@@ -50,6 +52,8 @@ export interface Resources {
   pathLength(d: string): number
   /** Word timings of a "captions" asset. */
   captions?(asset: string): CaptionWord[] | null
+  /** A parsed "lut" asset. */
+  lut?(asset: string): Lut | null
 }
 
 export interface VideoRequest {
@@ -122,6 +126,46 @@ interface Env {
   /** Output pixels per comp pixel. */
   scale: number
   pool: CanvasPool
+  /** Device px per comp px of `ctx` (differs from `scale` inside down-sampled blurs). */
+  px: number
+  /** When set, every text and caption drawn records where it landed (for the delivery checks). */
+  probe?: DrawnText[]
+  /** Grades a canvas in place. */
+  grade: (canvas: AnyCanvas, grade: Grade) => void
+}
+
+/** A text as drawn: its four corners in comp px, its font size and opacity. */
+export interface DrawnText {
+  layer: TextLayer | CaptionsLayer
+  text: string
+  corners: [number, number][]
+  size: number
+  alpha: number
+  /** A solid color for the glyphs (the first stop of a gradient); null when unknown. */
+  color: string | null
+  /** Has a stroke or a background box of its own, so the scene behind matters less. */
+  backed: boolean
+}
+
+/** A fill as one color at `lt`: itself, the current keyframed value, or a gradient's first stop. */
+function solidColor(fill: Fill, lt: number): string | null {
+  if (typeof fill === 'string') return fill
+  if ('stops' in fill) return fill.stops[0]?.[1] ?? null
+  return valueAt<string>(fill, lt, '#ffffff')
+}
+
+function probeText(env: Env, layer: TextLayer | CaptionsLayer, text: string, w: number, h: number, size: number, color: string | null, backed: boolean, x = 0, y = 0) {
+  if (!env.probe) return
+  const m = env.ctx.getTransform()
+  const k = 1 / env.px
+  const corners: [number, number][] = [
+    [x, y],
+    [x + w, y],
+    [x, y + h],
+    [x + w, y + h],
+  ].map(([cx, cy]) => [(m.a * cx + m.c * cy + m.e) * k, (m.b * cx + m.d * cy + m.f) * k])
+  const linear = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) * k
+  env.probe.push({ layer, text, corners, size: size * linear, alpha: env.ctx.globalAlpha, color, backed })
 }
 
 export interface RenderOptions {
@@ -149,6 +193,22 @@ export class Renderer {
   private scale: number
   private pool: CanvasPool
   private grain: AnyCanvas[] | null = null
+  /** Set to an array to collect where texts are drawn on the next `draw` calls (delivery checks). */
+  probe: DrawnText[] | null = null
+  private lutPass: LutPass | null | undefined
+  private baked = new WeakMap<Grade, Lut | null>()
+  /** Grades a canvas in place: the grade is baked once into a LUT, applied on the GPU when possible. */
+  private readonly gradeCanvas = (canvas: AnyCanvas, grade: Grade) => {
+    let lut = this.baked.get(grade)
+    if (lut === undefined) {
+      lut = isIdentityGrade(grade) ? null : bakeGrade(grade, grade.lut ? (this.res.lut?.(grade.lut) ?? null) : null)
+      this.baked.set(grade, lut)
+    }
+    if (!lut) return
+    if (this.lutPass === undefined) this.lutPass = LutPass.create()
+    if (this.lutPass) this.lutPass.apply(canvas, lut)
+    else applyLutCpu(canvas, lut)
+  }
 
   constructor(canvas: AnyCanvas, comp: Composition, res: Resources, options: RenderOptions = {}) {
     this.comp = comp
@@ -180,23 +240,44 @@ export class Renderer {
       this.drawInto(this.ctx, t)
     } else {
       // Running average of the sub-frames: sample i weighs 1/(i+1).
+      // With a grade, the scenes are averaged first and graded once (grading is the costly part),
+      // then the overlay is drawn on top at the frame's own time.
+      const graded = !!this.comp.grade
       const { canvas, ctx } = this.pool.take()
       this.ctx.setTransform(1, 0, 0, 1, 0, 0)
       times.forEach((st, i) => {
         ctx.setTransform(1, 0, 0, 1, 0, 0)
         ctx.clearRect(0, 0, this.width, this.height)
-        this.drawInto(ctx, st, false)
+        this.drawInto(ctx, st, false, graded ? 'scenes' : 'all')
         this.ctx.globalAlpha = 1 / (i + 1)
         this.ctx.drawImage(canvas, 0, 0)
       })
       this.ctx.globalAlpha = 1
       this.pool.give(canvas)
+      if (graded) {
+        this.gradeCanvas(this.ctx.canvas, this.comp.grade!)
+        this.drawOverlay(this.ctx, t)
+      }
       this.drawEffects(this.ctx, t)
     }
   }
 
-  private drawInto(ctx: Ctx2D, t: number, effects = true) {
-    const env: Env = { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool }
+  private env(ctx: Ctx2D): Env {
+    return { ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool, px: this.width / this.comp.width, probe: this.probe ?? undefined, grade: this.gradeCanvas }
+  }
+
+  /** The top-level layers (captions, logo), above the graded scenes. */
+  private drawOverlay(ctx: Ctx2D, t: number) {
+    ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
+    ctx.globalAlpha = 1
+    ctx.filter = 'none'
+    ctx.globalCompositeOperation = 'source-over'
+    drawLayers(this.env(ctx), this.comp.layers ?? [], t, this.comp.width, this.comp.height, this.duration)
+  }
+
+  /** `pass`: everything, or only the scenes (graded, without the overlay; see `draw`). */
+  private drawInto(ctx: Ctx2D, t: number, effects = true, pass: 'all' | 'scenes' = 'all') {
+    const env = this.env(ctx)
     ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
     ctx.globalAlpha = 1
     ctx.filter = 'none'
@@ -216,6 +297,9 @@ export class Renderer {
       if (a) this.pool.give(a.canvas)
       this.pool.give(b.canvas)
     }
+    if (pass === 'scenes') return
+    // The comp's grade covers the scenes; the overlay above them (captions, logo) keeps its colors.
+    if (this.comp.grade) this.gradeCanvas(ctx.canvas, this.comp.grade)
     drawLayers(env, this.comp.layers ?? [], t, env.W, env.H, this.duration)
     if (effects) this.drawEffects(ctx, t)
   }
@@ -223,7 +307,7 @@ export class Renderer {
   private offscreen(draw: (env: Env) => void) {
     const off = this.pool.take()
     off.ctx.setTransform(this.width / this.comp.width, 0, 0, this.height / this.comp.height, 0, 0)
-    draw({ ctx: off.ctx, res: this.res, W: this.comp.width, H: this.comp.height, scale: this.scale, pool: this.pool })
+    draw(this.env(off.ctx))
     return off
   }
 
@@ -468,6 +552,9 @@ function boxSize(env: Env, layer: Layer, lt: number, pw: number, ph: number): [n
       const page = captionState(env, layer, lt)
       return page ? [page.layout.w, page.layout.h] : [0, 0]
     }
+    case 'studio':
+      // Expanded into plain layers before rendering (studio.ts); nothing is drawn if it was not.
+      return [0, 0]
     case 'image':
     case 'video': {
       const natural = layer.type === 'image' ? env.res.image(layer.asset) : env.res.videoSize(layer.asset)
@@ -500,11 +587,13 @@ function filterString(layer: Layer, lt: number): string {
   return parts.length ? parts.join(' ') : 'none'
 }
 
+const COMPOSITE: Partial<Record<string, GlobalCompositeOperation>> = { add: 'lighter', atop: 'source-atop', matte: 'destination-in' }
+
 function applyLook(ctx: Ctx2D, layer: Layer, opacity: number, filter: string) {
   ctx.globalAlpha *= opacity
   ctx.filter = filter
   if (layer.blend && layer.blend !== 'normal') {
-    ctx.globalCompositeOperation = layer.blend === 'add' ? 'lighter' : layer.blend
+    ctx.globalCompositeOperation = COMPOSITE[layer.blend] ?? (layer.blend as GlobalCompositeOperation)
   }
 }
 
@@ -574,7 +663,8 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   const isolate =
     heavyBlur ||
     !!layer.shadow ||
-    (layer.type === 'group' && (opacity < 1 || fullFilter !== 'none' || (!!layer.blend && layer.blend !== 'normal')))
+    !!layer.grade ||
+    (layer.type === 'group' && (!!layer.isolate || opacity < 1 || fullFilter !== 'none' || (!!layer.blend && layer.blend !== 'normal')))
 
   const outer = env.ctx
   outer.save()
@@ -590,11 +680,12 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   } else {
     applyLook(outer, layer, opacity, fullFilter)
   }
-  const e: Env = { ...env, ctx: target }
+  const e: Env = { ...env, ctx: target, px: env.px * down }
 
   const x = num(layer.x, lt, pw / 2)
-  // Captions sit in the lower third by default, clear of the platform buttons at the very bottom.
-  const y = num(layer.y, lt, layer.type === 'captions' ? ph * (ph > pw ? 0.7 : 0.84) : ph / 2)
+  // Captions sit low by default but above the platform UI: on 9:16 ads the bottom 35% is covered
+  // by the caption, the call-to-action button and the account name, so they center at 58%.
+  const y = num(layer.y, lt, layer.type === 'captions' ? ph * (pw / ph < 0.7 ? 0.58 : ph > pw ? 0.7 : 0.84) : ph / 2)
   const [ax, ay] = layer.anchor ?? [0.5, 0.5]
   const scale = num(layer.scale, lt, 1) * mod.scale
   target.translate(x + mod.dx, y + mod.dy)
@@ -609,6 +700,7 @@ function drawLayer(env: Env, layer: Layer, t: number, pw: number, ph: number, pa
   drawContent(e, layer, lt, win.duration, bw, bh)
 
   if (off) {
+    if (layer.grade) env.grade(off.canvas, layer.grade)
     let source = off.canvas
     let blurred: ReturnType<CanvasPool['take']> | null = null
     if (heavyBlur) {
@@ -836,6 +928,14 @@ function applyMask(ctx: Ctx2D, m: GroupMask, lt: number, bw: number, bh: number)
   ctx.translate(num(m.x, lt, bw / 2), num(m.y, lt, bh / 2))
   ctx.rotate((num(m.rotation, lt, 0) * Math.PI) / 180)
   const s = num(m.scale, lt, 1)
+  if (Math.abs(s) < 1e-6) {
+    // A mask shrunk to nothing hides everything (a zero scale would make the canvas skip the clip).
+    ctx.setTransform(before)
+    ctx.beginPath()
+    ctx.rect(0, 0, 0, 0)
+    ctx.clip()
+    return
+  }
   ctx.scale(s, s)
   ctx.translate(-mw / 2, -mh / 2)
   ctx.scale(mw / vw, mh / vh)
@@ -850,6 +950,11 @@ function drawText(env: Env, layer: TextLayer, lt: number, duration: number) {
   const fill = layer.color ?? '#ffffff'
   const fillStyle = makeFill(ctx, fill, lt, 0, 0, layout.w, layout.h)
   const accentFill = layer.accent?.color !== undefined ? makeFill(ctx, layer.accent.color, lt, 0, 0, layout.w, layout.h) : fillStyle
+  if (env.probe) {
+    const x = Math.min(...layout.lines.map((l) => l.x))
+    const w = Math.max(...layout.lines.map((l) => l.x + l.w)) - x
+    probeText(env, layer, textOf(layer, lt), w, layout.h, layer.size ?? DEFAULT_SIZE, solidColor(fill, lt), !!layer.stroke || !!layer.background, x)
+  }
 
   if (layer.background) {
     const bg = layer.background
@@ -1034,6 +1139,7 @@ function drawCaptions(env: Env, layer: CaptionsLayer, lt: number) {
   const reveal = layer.mode === 'reveal'
   // The page arrives with a short pop; in reveal mode each word pops on its own start instead.
   const pageIn = Math.min(1, (lt - page.start) / 0.12)
+  probeText(env, layer, page.words.map((w) => w.text).join(' '), layout.w, layout.h, layout.size, solidColor(layer.color ?? '#ffffff', lt), layer.stroke !== false || !!layer.background)
 
   if (layer.background) {
     const bg = layer.background

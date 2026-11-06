@@ -1,8 +1,9 @@
 // Loads everything a composition needs in the browser: fonts, images, decoded video frames and audio.
 
 import { ALL_FORMATS, BlobSource, CanvasSink, Input, UrlSource, type WrappedCanvas } from 'mediabunny'
-import { audioMix } from './audio'
+import { audioMix, type MixClip } from './audio'
 import { wordsFromJson, wordsFromSrt } from './captions'
+import { parseCube, type Lut } from './grade'
 import { BUILTIN_FONT_FILES } from './fonts'
 import type { Drawable, Resources, VideoRequest } from './render'
 import { DEFAULT_FONT } from './text'
@@ -117,6 +118,8 @@ export class BrowserResources implements Resources {
   private frames = new Map<string, Drawable>()
   private lengths = new Map<string, number>()
   private words = new Map<string, CaptionWord[]>()
+  private luts = new Map<string, Lut>()
+  private beatTimes = new Map<string, number[]>()
   private comp: Composition
   private resolve: Resolver
 
@@ -143,6 +146,17 @@ export class BrowserResources implements Resources {
         if (asset.type === 'image') res.images.set(id, await loadImage(resolve(asset.src)))
         if (asset.type === 'video') res.videos.set(id, await res.openVideo(resolve(asset.src)))
         if (asset.type === 'captions') res.words.set(id, await loadWords(resolve(asset.src), asset.src))
+        if (asset.type === 'beats') {
+          const src = resolve(asset.src)
+          const data = JSON.parse(typeof src === 'string' ? await (await fetch(src)).text() : await src.text())
+          const beats = Array.isArray(data) ? data : data?.beats
+          if (!Array.isArray(beats) || !beats.every((b: unknown) => typeof b === 'number')) throw new Error('expected { "beats": [seconds, ...] } (from npm run beats)')
+          res.beatTimes.set(id, beats)
+        }
+        if (asset.type === 'lut') {
+          const src = resolve(asset.src)
+          res.luts.set(id, parseCube(typeof src === 'string' ? await (await fetch(src)).text() : await src.text()))
+        }
       } catch (e) {
         throw new Error(`Asset "${id}" (${asset.src}): ${e instanceof Error ? e.message : String(e)}`)
       }
@@ -187,6 +201,14 @@ export class BrowserResources implements Resources {
     return this.frames.get(`${asset}|${time}`) ?? null
   }
 
+  beats(asset: string): number[] | null {
+    return this.beatTimes.get(asset) ?? null
+  }
+
+  lut(asset: string): Lut | null {
+    return this.luts.get(asset) ?? null
+  }
+
   captions(asset: string): CaptionWord[] | null {
     return this.words.get(asset) ?? null
   }
@@ -211,9 +233,13 @@ export class BrowserResources implements Resources {
    * Decoded audio for every asset the mix uses. Sources without sound are skipped. `audioSrc` can
    * point an asset at a different file for its sound (the CLI passes WAV copies Chromium can decode).
    */
-  async audioBuffers(ctx: BaseAudioContext, audioSrc: (src: string) => string | undefined = () => undefined): Promise<Map<string, AudioBuffer>> {
+  /**
+   * Decoded sound of the assets in `mix`. Pass the mix of the comp that will play: the comp these
+   * resources were loaded with may still have scene lengths in beats, so its own mix can be empty.
+   */
+  async audioBuffers(ctx: BaseAudioContext, audioSrc: (src: string) => string | undefined = () => undefined, mix: MixClip[] = audioMix(this.comp)): Promise<Map<string, AudioBuffer>> {
     const out = new Map<string, AudioBuffer>()
-    const ids = new Set(audioMix(this.comp).flatMap((c) => (c.asset ? [c.asset] : [])))
+    const ids = new Set(mix.flatMap((c) => (c.asset ? [c.asset] : [])))
     for (const id of ids) {
       const asset = this.comp.assets?.[id]
       if (!asset) continue

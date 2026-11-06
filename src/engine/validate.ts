@@ -6,6 +6,7 @@ import { isKnownEase } from './easing'
 import { PRESET_NAMES } from './presets'
 import { SFX_NAMES } from './sfx'
 import type { Composition } from './types'
+import { layerIds } from './variants'
 
 export interface Issue {
   level: 'error' | 'warning'
@@ -26,7 +27,7 @@ export const BUILTIN_FONTS = [
 const common = [
   'type', 'id', 'comment', 'hidden', 'start', 'duration', 'x', 'y', 'anchor', 'scale', 'scaleX', 'scaleY',
   'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast', 'saturate', 'grayscale', 'hueRotate',
-  'shadow', 'blend', 'in', 'out',
+  'shadow', 'blend', 'grade', 'in', 'out',
 ]
 const layerKeys: Record<string, string[]> = {
   rect: ['width', 'height', 'radius', 'fill', 'stroke'],
@@ -38,7 +39,8 @@ const layerKeys: Record<string, string[]> = {
   ],
   image: ['asset', 'width', 'height', 'fit', 'radius'],
   video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted'],
-  group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke'],
+  group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke', 'isolate'],
+  studio: ['backdrop', 'products', 'camera', 'move'],
   captions: [
     'words', 'asset', 'mode', 'maxWords', 'maxChars', 'font', 'size', 'weight', 'italic', 'color', 'highlight',
     'uppercase', 'stroke', 'background', 'width', 'letterSpacing', 'lineHeight',
@@ -48,12 +50,13 @@ const animatable = new Set([
   'x', 'y', 'scale', 'scaleX', 'scaleY', 'rotation', 'skewX', 'opacity', 'blur', 'brightness', 'contrast',
   'saturate', 'grayscale', 'hueRotate', 'width', 'height', 'radius', 'trimStart', 'trimEnd',
 ])
-const compKeys = ['$schema', 'comment', 'width', 'height', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects']
-const sceneKeys = ['id', 'comment', 'duration', 'background', 'layers', 'transition']
+const compKeys = ['$schema', 'comment', 'width', 'height', 'platform', 'variants', 'fps', 'duration', 'background', 'fonts', 'assets', 'audio', 'mix', 'scenes', 'layers', 'effects', 'grade', 'beats']
+export const PLATFORM_IDS = ['reels', 'tiktok', 'feed', 'youtube']
+const sceneKeys = ['id', 'comment', 'duration', 'beats', 'background', 'layers', 'transition']
 const transitionTypes = ['cut', 'fade', 'dip', 'slide', 'push', 'zoom', 'blur', 'wipe', 'iris', 'curve', 'zoomThrough', 'zoomBack', 'flash', 'whip']
 const blendModes = [
   'normal', 'multiply', 'screen', 'overlay', 'darken', 'lighten', 'color-dodge', 'color-burn', 'hard-light',
-  'soft-light', 'difference', 'exclusion', 'add',
+  'soft-light', 'difference', 'exclusion', 'add', 'atop', 'matte',
 ]
 
 function distance(a: string, b: string): number {
@@ -103,10 +106,63 @@ export function validate(input: unknown): Issue[] {
   if (comp.fps !== undefined && (!isNum(comp.fps) || comp.fps <= 0 || comp.fps > 120)) err('fps', 'Must be between 1 and 120.')
   if (comp.duration !== undefined && (!isNum(comp.duration) || comp.duration <= 0)) err('duration', 'Must be a positive number of seconds.')
   if (comp.scenes === undefined && comp.layers === undefined) err('', 'Add "scenes" or "layers".')
+  const checkPlatform = (v: unknown, path: string) => {
+    if (v !== undefined && !PLATFORM_IDS.includes(v as string)) err(path, `Unknown platform.${suggest(String(v), PLATFORM_IDS)} Options: ${PLATFORM_IDS.join(', ')}.`)
+  }
+  checkPlatform(comp.platform, 'platform')
+  if (comp.variants !== undefined) {
+    if (!isObj(comp.variants)) err('variants', 'Must be an object of { name: { width, height, platform, layers } }.')
+    else {
+      let ids = new Set<string>()
+      try {
+        ids = layerIds(comp)
+      } catch {
+        // Malformed scenes or layers are reported below.
+      }
+      for (const [name, v] of Object.entries(comp.variants)) {
+        const p = `variants.${name}`
+        if (!isObj(v)) {
+          err(p, 'Must be { width, height, platform, layers }.')
+          continue
+        }
+        keys(v, ['width', 'height', 'platform', 'layers', 'comment'], p)
+        for (const k of ['width', 'height'] as const) if (v[k] !== undefined && (!isNum(v[k]) || (v[k] as number) <= 0)) err(`${p}.${k}`, 'Must be a positive number of pixels.')
+        checkPlatform(v.platform, `${p}.platform`)
+        if (v.layers !== undefined) {
+          if (!isObj(v.layers)) err(`${p}.layers`, 'Must be { "<layer id>": { property: value } }.')
+          else for (const [id, o] of Object.entries(v.layers)) {
+            if (!ids.has(id)) warn(`${p}.layers.${id}`, `No layer has the id "${id}".${suggest(id, [...ids])}`)
+            if (!isObj(o)) err(`${p}.layers.${id}`, 'Must be an object of properties.')
+          }
+        }
+      }
+    }
+  }
   if (comp.scenes === undefined && comp.duration === undefined && comp.layers !== undefined)
     warn('duration', 'Without scenes, set "duration" explicitly.')
 
   const assets = isObj(comp.assets) ? comp.assets : {}
+  const gradeKeys = ['exposure', 'temperature', 'tint', 'saturation', 'contrast', 'shadows', 'midtones', 'highlights', 'fade', 'lut', 'lutAmount']
+  const checkGrade = (g: unknown, path: string) => {
+    if (g === undefined) return
+    if (!isObj(g)) return err(path, `Must be { ${gradeKeys.join(', ')} }.`)
+    keys(g, gradeKeys, path)
+    const ranges: Record<string, [number, number]> = { exposure: [-4, 4], temperature: [-1, 1], tint: [-1, 1], saturation: [0, 3], contrast: [0.2, 3], fade: [0, 1], lutAmount: [0, 1] }
+    for (const [k, [lo, hi]] of Object.entries(ranges)) {
+      const v = g[k]
+      if (v !== undefined && (!isNum(v) || v < lo || v > hi)) err(`${path}.${k}`, `Must be a number from ${lo} to ${hi}.`)
+    }
+    for (const k of ['shadows', 'midtones', 'highlights']) {
+      const v = g[k]
+      const ok = (x: unknown) => isNum(x) && x >= -1 && x <= 1
+      if (v !== undefined && !(ok(v) || (Array.isArray(v) && v.length === 3 && v.every(ok)))) err(`${path}.${k}`, 'Must be a number from -1 to 1, or [r, g, b] of such numbers.')
+    }
+    if (g.lut !== undefined) {
+      const a = assets[g.lut as string] as { type?: string } | undefined
+      if (!a) err(`${path}.lut`, `No asset "${String(g.lut)}". Declare it in "assets" as { "type": "lut", "src": "look.cube" }.`)
+      else if (a.type !== 'lut') err(`${path}.lut`, `Asset "${String(g.lut)}" is not a "lut".`)
+    }
+  }
   if (comp.assets !== undefined && !isObj(comp.assets)) err('assets', 'Must be an object of { id: { type, src } }.')
   for (const [id, a] of Object.entries(assets)) {
     const p = `assets.${id}`
@@ -114,7 +170,8 @@ export function validate(input: unknown): Issue[] {
       err(p, 'Must be { "type": "image" | "video" | "audio", "src": "..." }.')
       continue
     }
-    if (!['image', 'video', 'audio', 'captions'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio" or "captions".')
+    if (!['image', 'video', 'audio', 'captions', 'lut', 'beats'].includes(a.type as string)) err(`${p}.type`, 'Must be "image", "video", "audio", "captions", "lut" or "beats".')
+    else if (a.type === 'lut' && typeof a.src === 'string' && !/\.cube$/i.test(a.src)) warn(`${p}.src`, 'LUTs are read as .cube files.')
     if (typeof a.src !== 'string' || !a.src) err(`${p}.src`, 'Must be a path relative to the composition file, or a URL.')
   }
 
@@ -221,6 +278,7 @@ export function validate(input: unknown): Issue[] {
     if (l.blend !== undefined && !blendModes.includes(l.blend as string)) err(`${path}.blend`, `Unknown blend mode.${suggest(String(l.blend), blendModes)}`)
     checkPreset(l.in, `${path}.in`)
     checkPreset(l.out, `${path}.out`)
+    checkGrade(l.grade, `${path}.grade`)
     if (l.shadow !== undefined) {
       if (!isObj(l.shadow)) err(`${path}.shadow`, 'Must be { color, blur, x, y }.')
       else if (l.shadow.color !== undefined) checkColor(l.shadow.color, `${path}.shadow.color`)
@@ -268,6 +326,43 @@ export function validate(input: unknown): Issue[] {
         if (l.fit !== undefined && !['cover', 'contain', 'fill'].includes(l.fit as string)) err(`${path}.fit`, 'Must be "cover", "contain" or "fill".')
         break
       }
+      case 'studio': {
+        const b = l.backdrop
+        if (b !== undefined) {
+          if (!isObj(b)) err(`${path}.backdrop`, 'Must be { "style", "color", "floor" }.')
+          else {
+            keys(b, ['style', 'color', 'floor'], `${path}.backdrop`)
+            if (b.style !== undefined && !['sweep', 'spot', 'table', 'none'].includes(b.style as string)) err(`${path}.backdrop.style`, 'Must be "sweep", "spot", "table" or "none".')
+            if (b.color !== undefined) checkColor(b.color, `${path}.backdrop.color`)
+            if (b.floor !== undefined && !isNum(b.floor)) err(`${path}.backdrop.floor`, 'Must be px from the top.')
+          }
+        }
+        if (l.camera !== undefined && !['push', 'pull', 'drift', 'rise', 'still'].includes(l.camera as string)) err(`${path}.camera`, 'Must be "push", "pull", "drift", "rise" or "still".')
+        if (l.move !== undefined && !isNum(l.move)) err(`${path}.move`, 'Must be a number (1 = default strength).')
+        if (!Array.isArray(l.products) || !l.products.length) {
+          err(`${path}.products`, 'A studio needs "products": [{ "asset": "<image id>" }].')
+          break
+        }
+        l.products.forEach((p: unknown, i: number) => {
+          const pp = `${path}.products[${i}]`
+          if (!isObj(p)) return err(pp, 'A product is { "asset", "width", "x", "shadow", "light", ... }.')
+          keys(p, ['id', 'asset', 'width', 'x', 'y', 'shadow', 'light', 'lightAmount', 'reflection', 'shine', 'halo', 'float', 'in', 'out'], pp)
+          const a = assets[p.asset as string]
+          if (typeof p.asset !== 'string') err(`${pp}.asset`, 'Must be the id of an image in "assets".')
+          else if (!a) err(`${pp}.asset`, `No asset "${p.asset}" in "assets".${suggest(p.asset, Object.keys(assets))}`)
+          else if (a.type !== 'image') err(`${pp}.asset`, `Asset "${p.asset}" is a ${a.type}, not an image.`)
+          for (const k of ['width', 'x', 'y', 'lightAmount', 'reflection'] as const) if (p[k] !== undefined && !isNum(p[k])) err(`${pp}.${k}`, 'Must be a number.')
+          if (p.shadow !== undefined && !['soft', 'cast', false].includes(p.shadow as string | false)) err(`${pp}.shadow`, 'Must be "soft", "cast" or false.')
+          if (p.light !== undefined && !['left', 'right', 'top', false].includes(p.light as string | false)) err(`${pp}.light`, 'Must be "left", "right", "top" or false.')
+          if (p.shine !== undefined && typeof p.shine !== 'boolean' && !isNum(p.shine)) err(`${pp}.shine`, 'Must be true, false or the second it starts.')
+          if (p.halo !== undefined) checkColor(p.halo, `${pp}.halo`)
+          if (typeof p.asset === 'string' && a?.type === 'image' && !/\.(png|webp|avif|svg)(\?|$)/i.test(a.src))
+            warn(`${pp}.asset`, 'A photo with its own background sits on the set as a rectangle: use a cut-out PNG or WebP with a transparent background.')
+          checkPreset(p.in, `${pp}.in`)
+          checkPreset(p.out, `${pp}.out`)
+        })
+        break
+      }
       case 'group':
         checkLayers(l.layers, `${path}.layers`)
         if (l.mask !== undefined) {
@@ -308,7 +403,10 @@ export function validate(input: unknown): Issue[] {
         const p = `scenes[${i}]`
         if (!isObj(s)) return err(p, 'A scene is { "duration", "layers", ... }.')
         keys(s, sceneKeys, p)
-        if (!isNum(s.duration) || s.duration <= 0) err(`${p}.duration`, 'Must be a positive number of seconds.')
+        if (s.beats !== undefined) {
+          if (!Number.isInteger(s.beats) || (s.beats as number) <= 0) err(`${p}.beats`, 'Must be a whole number of beats (> 0).')
+          if (!comp.beats) err(`${p}.beats`, 'Needs "beats": { "asset": "..." } on the composition (from npm run beats).')
+        } else if (!isNum(s.duration) || s.duration <= 0) err(`${p}.duration`, 'Must be a positive number of seconds.')
         checkFill(s.background, `${p}.background`)
         checkLayers(s.layers ?? [], `${p}.layers`)
         const tr = s.transition
@@ -333,7 +431,11 @@ export function validate(input: unknown): Issue[] {
       comp.audio.forEach((a, i) => {
         const p = `audio[${i}]`
         if (!isObj(a)) return err(p, 'Must be { "asset": "...", ... }.')
-        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'beat', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        if (a.beat !== undefined) {
+          if (!Number.isInteger(a.beat) || (a.beat as number) < 0) err(`${p}.beat`, 'Must be a beat number (0 = the first).')
+          if (!comp.beats) err(`${p}.beat`, 'Needs "beats": { "asset": "..." } on the composition (from npm run beats).')
+        }
         if (a.sfx !== undefined) {
           if (!SFX_NAMES.includes(a.sfx as never)) err(`${p}.sfx`, `Unknown sound effect "${String(a.sfx)}".${suggest(String(a.sfx), SFX_NAMES)} Options: ${SFX_NAMES.join(', ')}.`)
           if (a.asset !== undefined) err(p, 'Use either "asset" or "sfx", not both.')
@@ -364,6 +466,18 @@ export function validate(input: unknown): Issue[] {
         if (!isObj(d)) err('mix.duck', 'Must be { amount?, attack?, release?, threshold? } or false.')
         else keys(d, ['amount', 'attack', 'release', 'threshold'], 'mix.duck')
       }
+    }
+  }
+  checkGrade(comp.grade, 'grade')
+  if (comp.beats !== undefined) {
+    const b = comp.beats as unknown
+    if (!isObj(b) || typeof b.asset !== 'string') err('beats', 'Must be { "asset": "<a beats asset>", "offset"?: seconds }.')
+    else {
+      keys(b, ['asset', 'offset'], 'beats')
+      const a = assets[b.asset] as { type?: string } | undefined
+      if (!a) err('beats.asset', `No asset "${b.asset}". Declare it as { "type": "beats", "src": "music.beats.json" }.`)
+      else if (a.type !== 'beats') err('beats.asset', `Asset "${b.asset}" is not a "beats" asset.`)
+      if (b.offset !== undefined && !isNum(b.offset)) err('beats.offset', 'Must be seconds: the comp time where the music file starts.')
     }
   }
   if (comp.effects !== undefined) {

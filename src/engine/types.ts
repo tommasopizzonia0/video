@@ -117,6 +117,10 @@ export type BlendMode =
   | 'difference'
   | 'exclusion'
   | 'add'
+  /** Paints only where the layers below in the same isolated group are (a highlight on a product). */
+  | 'atop'
+  /** Keeps the layers below only where this layer is, with its alpha (a fading reflection). */
+  | 'matte'
 
 export interface LayerBase {
   type: string
@@ -154,9 +158,40 @@ export interface LayerBase {
   hueRotate?: Anim<number>
   shadow?: Shadow
   blend?: BlendMode
+  /** Color grade of this layer alone (to match footage from different cameras). */
+  grade?: Grade
 
   in?: Preset
   out?: Preset
+}
+
+/**
+ * A color grade. Corrections run in this order: exposure, white balance and saturation in linear
+ * light; lift/gamma/gain, contrast and fade on the display image; then the creative LUT.
+ */
+export interface Grade {
+  /** Stops: +1 doubles the light, -1 halves it. */
+  exposure?: number
+  /** -1 (cool, blue) .. 1 (warm, orange). */
+  temperature?: number
+  /** -1 (green) .. 1 (magenta). */
+  tint?: number
+  /** 1 = unchanged, 0 = black and white. */
+  saturation?: number
+  /** 1 = unchanged; 1.1–1.25 gives punch. An S-curve around mid grey, black and white stay put. */
+  contrast?: number
+  /** Lift: raises (+) or crushes (-) the blacks, -1..1. A [r, g, b] triple tints the shadows. */
+  shadows?: number | [number, number, number]
+  /** Gamma: brighter (+) or darker (-) mid-tones, -1..1, or [r, g, b]. */
+  midtones?: number | [number, number, number]
+  /** Gain: brighter (+) or darker (-) highlights, -1..1, or [r, g, b]. */
+  highlights?: number | [number, number, number]
+  /** 0..1: lifted, matte blacks. */
+  fade?: number
+  /** A "lut" asset (.cube file) applied after the corrections. */
+  lut?: string
+  /** How much of the LUT, 0..1 (default 1). */
+  lutAmount?: number
 }
 
 export interface RectLayer extends LayerBase {
@@ -297,6 +332,8 @@ export interface GroupLayer extends LayerBase {
   radius?: Anim<number>
   fill?: Fill
   stroke?: Stroke
+  /** Draw the children on their own before compositing, so "atop" and "matte" act on them alone. */
+  isolate?: boolean
 }
 
 export interface GroupMask {
@@ -352,7 +389,58 @@ export interface CaptionsLayer extends LayerBase {
   lineHeight?: number
 }
 
-export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer | CaptionsLayer
+export type Layer = RectLayer | EllipseLayer | PathLayer | TextLayer | ImageLayer | VideoLayer | GroupLayer | CaptionsLayer | StudioLayer
+
+/** One product on a studio set. */
+export interface StudioProduct {
+  id?: string
+  /** An image asset, best a cut-out PNG with a transparent background. */
+  asset: string
+  /** Width of the product itself in px (transparent margins of a cut-out are measured and left out). */
+  width?: number
+  /** Center of the product, px from the left. */
+  x?: number
+  /** Where its base stands, px from the top (default: the studio floor). */
+  y?: number
+  /** Ground shadow: "soft" (default), "cast" (also a long shadow away from the light) or false. */
+  shadow?: 'soft' | 'cast' | false
+  /** Side of the softbox highlight (default "left"), or false. */
+  light?: 'left' | 'right' | 'top' | false
+  /** Strength of the highlight and shading, 0..1 (default 0.6). */
+  lightAmount?: number
+  /** Mirror image on a glossy floor, its opacity 0..1 (default 0: none). */
+  reflection?: number
+  /** A band of light crossing the product, starting this many seconds in (or true: 0.5 s). */
+  shine?: number | boolean
+  /** Color of a glow behind the product. */
+  halo?: string
+  /** Gentle floating up and down, the shadow breathing with it. */
+  float?: boolean
+  in?: Preset
+  out?: Preset
+}
+
+export interface StudioBackdrop {
+  /** "sweep": seamless paper, wall into floor; "spot": a pool of light on a darker set; "table": a table top and a wall; "none": no set. */
+  style?: 'sweep' | 'spot' | 'table' | 'none'
+  color?: string
+  /** Floor line where products stand, px from the top (default 74% of the frame height). */
+  floor?: number
+}
+
+/**
+ * A product shot from photos: backdrop, products with shadows, highlights and reflections, and a
+ * camera move with parallax. Expanded into plain layers before rendering (see studio.ts).
+ */
+export interface StudioLayer extends LayerBase {
+  type: 'studio'
+  backdrop?: StudioBackdrop
+  products: StudioProduct[]
+  /** Camera move over the layer's duration (default "push"). */
+  camera?: 'push' | 'pull' | 'drift' | 'rise' | 'still'
+  /** Strength of the camera move (1 = default). */
+  move?: number
+}
 
 export type TransitionType =
   | 'cut'
@@ -391,7 +479,10 @@ export interface Transition {
 export interface Scene {
   id?: string
   comment?: string
+  /** Seconds. May be left out when `beats` sets it. */
   duration: number
+  /** Length in beats of the music (needs the comp's `beats`): the next cut lands on the beat. */
+  beats?: number
   background?: Fill
   layers: Layer[]
   /** How this scene enters, overlapping the end of the previous one. */
@@ -399,8 +490,8 @@ export interface Scene {
 }
 
 export interface Asset {
-  /** "captions": word timings for a captions layer (Whisper JSON, a word list, SRT or VTT). */
-  type: 'image' | 'video' | 'audio' | 'captions'
+  /** "lut": a 3D .cube LUT for `grade.lut`. "captions": word timings for a captions layer (Whisper JSON, a word list, SRT or VTT). */
+  type: 'image' | 'video' | 'audio' | 'captions' | 'lut' | 'beats'
   /** Path relative to the composition file, or a URL. */
   src: string
 }
@@ -425,6 +516,8 @@ export interface AudioClip {
   scene?: string | number
   /** Seconds: comp time, or time in `scene` when set. */
   start?: number
+  /** Starts on this beat of the music instead (0 = the first; needs the comp's `beats`). */
+  beat?: number
   /** Seconds into the source. */
   sourceStart?: number
   duration?: number
@@ -460,9 +553,26 @@ export interface Effects {
   motionBlur?: { samples?: number; shutter?: number }
 }
 
+/** Where the video runs: sets the safe zones of the checks and the studio guides. */
+export type PlatformId = 'reels' | 'tiktok' | 'feed' | 'youtube'
+
+/** The same video in another format: a new frame size and platform, and layers patched by id. */
+export interface Variant {
+  width?: number
+  height?: number
+  platform?: PlatformId
+  /** Properties that replace those of the layer with that id, e.g. { "titolo": { "y": 520, "size": 96 } }. */
+  layers?: Record<string, Record<string, unknown>>
+  comment?: string
+}
+
 export interface Composition {
   width: number
   height: number
+  /** Target platform (default: from the shape, 9:16 = reels). */
+  platform?: PlatformId
+  /** Other formats of the same video, rendered with `--variant <name>`. */
+  variants?: Record<string, Variant>
   fps?: number
   /** Seconds. Defaults to the end of the last scene. */
   duration?: number
@@ -476,4 +586,8 @@ export interface Composition {
   /** Drawn above the scenes, in comp time. */
   layers?: Layer[]
   effects?: Effects
+  /** Color grade of the whole picture (before grain and vignette). */
+  grade?: Grade
+  /** Beat times of the music (a "beats" asset from `npm run beats`), for scene `beats` and audio `beat`. */
+  beats?: { asset: string; offset?: number }
 }

@@ -15,10 +15,38 @@ description: Make a motion-design video (promo, reel, launch video, animated tit
    - `npm run render -- path/video.json --contact 24` and read the PNG: check hierarchy, overlaps,
      cut-off text, empty or frozen moments, and that every scene reads in half a second.
    - `--still 1.2,3.4` for a close look at a moment; `--scale 0.5` for a quick draft MP4.
+   - Set `"platform"` and, when the spot runs in more than one format, `"variants"` (ids on every layer
+     placed in pixels; see docs/MOTION.md). Check and render each with `--variant <name>` or `all`.
+   - `npm run render -- path/video.json --check [--platform reels|tiktok|feed|youtube]`: safe zones of the
+     platform's ads, text size, contrast, reading time, empty frames and the hook. Fix every ERRORE and
+     weigh every ATTENZIONE before the final render.
 5. Render the final: `npm run render -- path/video.json -o out/video.mp4` (needs Chromium + ffmpeg;
    in a cloud container set `PLAYWRIGHT_BROWSERS_PATH` if Chromium is preinstalled elsewhere).
+   The render reads the file back and prints its specs (codec, yuv420p, fps, LUFS, true peak, faststart):
+   never call a video ready while that report lists a problem.
 6. Deliver the MP4 plus a poster frame (`--still`), and keep the JSON so the video can be edited
    later in the browser (Motion view, `#motion`).
+
+Voice: `npm run transcribe -- voce.mp3 [--prompt "brand names"]` → `voce.words.json` for a `captions`
+asset; read the "parole incerte" it lists and fix them in the JSON before rendering.
+
+Footage: run `npm run prep -- clip.mp4` on every shot first and apply what it suggests
+(`--stabilize`, `--denoise` for voice (DeepFilterNet; `--keep 20` if it sounds too dry), `--denoise fft` for ambience or music, `--hum`); tell the user what it cannot fix instead of hiding it.
+
+Photos or stock video the user did not supply: `npm run photos -- "<english search>" --orient tall`
+(add `--video` for clips), look at `provini.jpg`, use only those, and pass `CREDITI.txt` on to the
+user (CC BY files must be credited).
+
+Product photos: put cut-outs (transparent PNG) in a `studio` layer (backdrop, shadows, softbox light,
+reflection, shine, camera push with parallax) instead of placing a bare image; see docs/MOTION.md "Product shots". No cut-out? `npm run cutout -- photo.jpg`
+(or `npm run photos -- "…" --cutout`), then check `provini-scontorno.jpg` and the warnings.
+
+Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
+`beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.
+If the confidence it prints is under 0.5, cut by ear instead.
+
+Color: give footage from different sources a per-layer `grade` so they match, then one comp `grade`
+for the look (subtle: contrast 1.1–1.2, saturation 1.05–1.15, warm highlights or a LUT at 60–80%).
 
 Design rules that matter most: one accent color and one accent serif word per headline; headlines enter
 with `maskUp` by word, secondary text later with `fadeUp`; ease out (`smooth`, `outExpo`), never linear
