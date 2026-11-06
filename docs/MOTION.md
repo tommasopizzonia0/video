@@ -309,6 +309,16 @@ the width you ask. A photo with its own background sits on the set as a rectangl
   - `halo`: a color glowing behind the product
   - `float`: a slow up-and-down, the shadow breathing with it
 
+**Cut-outs from any photo:** `npm run cutout -- foto.jpg` (or a folder, `-o out/`) writes
+`foto-scontorno.png` with BiRefNet (MIT licence, via rembg, on the CPU), trimmed to the subject, and
+`provini-scontorno.jpg` showing each cut-out on a dark and a light half so fringes show. It warns
+when the subject is cut by the photo's edge (it would look chopped on the set), when the background
+did not come off, and when the edge is uncertain (hair, glass). `npm run photos -- "…" --cutout`
+does it right after the download. Needs Python with `pip install "rembg[cpu]"` (`CUTOUT_PYTHON` for a
+virtualenv) and about 8 GB of free memory (`--lite`: about 6.5 GB, a little less precise); about 20 s
+per photo, the model (1 GB) downloads on first use. Clear glass comes out opaque, with the old
+background seen through it.
+
 Put titles, price and CTA as normal layers above it. Limits: this is 2D: the light is painted on, not
 computed from the product's shape, so it reads best on simple objects (bottles, boxes, pots); on
 foliage `shine` looks like mist. A cut-out with leftover edges or its own baked shadow shows them.

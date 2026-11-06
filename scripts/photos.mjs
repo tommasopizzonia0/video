@@ -12,6 +12,7 @@
 // Options:
 //   -n <count>         files to download (default 12; 6 for videos)
 //   --video            video clips (Pexels, Pixabay) instead of pictures
+//   --cutout           also remove the background of each picture (npm run cutout), for a studio layer
 //   --kind <photo|illustration|vector>  type of picture (illustrations and vectors: Pixabay, Openverse)
 //   --max-duration <s> videos: longest clip
 //   --lang <code>      language of the search words for Pixabay and Pexels (e.g. it; default en)
@@ -210,3 +211,9 @@ writeFileSync(join(dir, 'CREDITI.txt'), lines.join('\n') + '\n')
 console.log(`\n${dir}`)
 for (const c of credits) console.log(`  ${c.file}  ${video ? `${c.size} ${c.duration}s  ` : ''}${c.licence}${c.credit ? ' (citare)' : ''}  ${c.creator}`)
 console.log(`provini.jpg, CREDITI.txt, crediti.json`)
+
+if (args.includes('--cutout') && !video) {
+  console.log('')
+  const r = spawnSync(process.execPath, [join(import.meta.dirname, 'cutout.mjs'), ...kept.map((k) => join(dir, k.file))], { stdio: 'inherit' })
+  if (r.status !== 0) process.exit(r.status ?? 1)
+}

@@ -38,7 +38,8 @@ Photos or stock video the user did not supply: `npm run photos -- "<english sear
 user (CC BY files must be credited).
 
 Product photos: put cut-outs (transparent PNG) in a `studio` layer (backdrop, shadows, softbox light,
-reflection, shine, camera push with parallax) instead of placing a bare image; see docs/MOTION.md "Product shots".
+reflection, shine, camera push with parallax) instead of placing a bare image; see docs/MOTION.md "Product shots". No cut-out? `npm run cutout -- photo.jpg`
+(or `npm run photos -- "…" --cutout`), then check `provini-scontorno.jpg` and the warnings.
 
 Music: `npm run beats -- music.mp3` → `music.beats.json` (a `beats` asset, comp `beats`); give scenes
 `beats: n` instead of `duration` and sound effects `beat: n`, put the big cut on a *stacco forte*.

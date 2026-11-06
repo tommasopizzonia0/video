@@ -30,6 +30,7 @@ npm run render -- examples/launch.json --check      # controllo prima della cons
 npm run transcribe -- voce.mp3                       # sottotitoli: le parole con i tempi, da Whisper (pip install faster-whisper)
 npm run prep -- clip.mp4 --stabilize --denoise      # clip girate: stabilizza, toglie fruscio e ronzio
 npm run photos -- "olive tree" --orient tall           # foto e video (--video) dal web con licenza per pubblicità
+npm run cutout -- foto.jpg                              # scontorno AI (BiRefNet) per gli scatti prodotto
 npm run beats -- musica.mp3                          # i beat della musica, per tagliare a tempo
 ```
 

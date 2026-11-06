@@ -14,7 +14,8 @@
     "transcribe": "node scripts/transcribe.mjs",
     "beats": "node scripts/beats.mjs",
     "prep": "node scripts/prep.mjs",
-    "photos": "node scripts/photos.mjs"
+    "photos": "node scripts/photos.mjs",
+    "cutout": "node scripts/cutout.mjs"
   },
   "dependencies": {
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
