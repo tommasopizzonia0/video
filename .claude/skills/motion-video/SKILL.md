@@ -56,6 +56,10 @@ arrivals; slow background drift so no frame is static; `grain` ~0.04 and `vignet
 -14 LUFS. When the engine can't express something, extend the engine
 (`src/engine/`, with a test in `src/engine/engine.test.ts`) rather than faking it.
 
+Style skills that build on this engine: `/swiss-grid` (Swiss poster grid), `/hologram` (ice-blue scan + HUD),
+`/globe-arcs` (dotted globe with delivery arcs, rendered as a clip for a `video` layer). Clips from
+`/map-route` (3D city route) and `/teardown` (3D machine simulator) also drop in as `video` layers.
+
 ## Working live with the user
 
 `npm run build:artifact` builds the Motion studio as one HTML file (`dist-artifact/index.html`) to publish
