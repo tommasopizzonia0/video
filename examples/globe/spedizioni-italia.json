@@ -1,0 +1,21 @@
+{
+  "comment": "Esempio: spedizioni da un vivaio in Toscana (posizione d'esempio) a tutta Italia. 9:16, 6 s.",
+  "duration": 6,
+  "from": { "name": "Il vivaio", "lat": 43.93, "lon": 10.91 },
+  "to": [
+    { "name": "Milano", "lat": 45.46, "lon": 9.19 },
+    { "name": "Torino", "lat": 45.07, "lon": 7.69 },
+    { "name": "Venezia", "lat": 45.44, "lon": 12.33 },
+    { "name": "Roma", "lat": 41.9, "lon": 12.5 },
+    { "name": "Napoli", "lat": 40.85, "lon": 14.27 },
+    { "name": "Bari", "lat": 41.12, "lon": 16.87 },
+    { "name": "Palermo", "lat": 38.12, "lon": 13.36 },
+    { "name": "Cagliari", "lat": 39.22, "lon": 9.12 }
+  ],
+  "focus": [42.3, 12.4],
+  "zoom": 9,
+  "zoomFrom": 0.9,
+  "centerY": 0.47,
+  "arcHeight": 0.03,
+  "arcStagger": 0.16
+}

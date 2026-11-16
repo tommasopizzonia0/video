@@ -1,0 +1,173 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:transparent}canvas{display:block}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+// Dotted globe with arcs. Everything is a pure function of time: draw(t) paints one frame.
+// The spec arrives as window.SPEC and the land TopoJSON as window.LAND (set by render.mjs before init()).
+const D2R = Math.PI / 180
+const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v))
+const seg = (t, a, d) => clamp((t - a) / d)
+const outCubic = (x) => 1 - Math.pow(1 - x, 3)
+const inOutCubic = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2)
+const outBack = (x) => { const c = 1.6; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2) }
+
+let S, ctx, W, H, dots, landMask
+const vec = (lat, lon) => [Math.cos(lat * D2R) * Math.cos(lon * D2R), Math.cos(lat * D2R) * Math.sin(lon * D2R), Math.sin(lat * D2R)]
+
+// --- TopoJSON land -> equirectangular mask (one-time) ---
+function decodeArcs(topo) {
+  const [sx, sy] = topo.transform.scale, [tx, ty] = topo.transform.translate
+  return topo.arcs.map((arc) => { let x = 0, y = 0; return arc.map(([dx, dy]) => { x += dx; y += dy; return [x * sx + tx, y * sy + ty] }) })
+}
+function buildMask(topo) {
+  const arcs = decodeArcs(topo)
+  const ring = (ids) => { const pts = []; for (const i of ids) { const a = i < 0 ? arcs[~i].slice().reverse() : arcs[i]; pts.push(...(pts.length ? a.slice(1) : a)) } return pts }
+  const mw = 4096, mh = 2048, cv = document.createElement('canvas'); cv.width = mw; cv.height = mh
+  const m = cv.getContext('2d'); m.fillStyle = '#fff'
+  const geoms = topo.objects.land.type === 'GeometryCollection' ? topo.objects.land.geometries : [topo.objects.land]
+  for (const g of geoms) {
+    const polys = g.type === 'Polygon' ? [g.arcs] : g.arcs
+    for (const poly of polys) {
+      m.beginPath()
+      for (const r of poly) { ring(r).forEach(([lon, lat], k) => { const x = (lon + 180) / 360 * mw, y = (90 - lat) / 180 * mh; k ? m.lineTo(x, y) : m.moveTo(x, y) }); m.closePath() }
+      m.fill('evenodd')
+    }
+  }
+  const data = m.getImageData(0, 0, mw, mh).data
+  return (lat, lon) => { const x = Math.min(mw - 1, Math.floor((lon + 180) / 360 * mw)), y = Math.min(mh - 1, Math.floor((90 - lat) / 180 * mh)); return data[(y * mw + x) * 4] > 127 }
+}
+// Level of detail: level L has 4^L times the points of level 0 and is drawn around zoom 2^L,
+// so the dots keep about the same spacing on screen while the camera zooms in.
+function buildDots(n) {
+  const out = [], ga = Math.PI * (3 - Math.sqrt(5))
+  for (let i = 0; i < n; i++) {
+    const z = 1 - (2 * i + 1) / n, r = Math.sqrt(1 - z * z), th = ga * i
+    const x = r * Math.cos(th), y = r * Math.sin(th)
+    if (landMask(Math.asin(z) / D2R, Math.atan2(y, x) / D2R)) out.push(x, y, z)
+  }
+  return new Float32Array(out)
+}
+
+// --- camera ---
+// view(lat0, lon0): rotate a world vector so (lat0, lon0) faces the viewer. Returns [x, y, depth].
+function viewer(lat0, lon0) {
+  const c0 = Math.cos(-lon0 * D2R), s0 = Math.sin(-lon0 * D2R), cp = Math.cos(lat0 * D2R), sp = Math.sin(lat0 * D2R)
+  return ([x, y, z]) => { const X = x * c0 - y * s0, Y = x * s0 + y * c0; return [Y, cp * z - sp * X, sp * z + cp * X] }
+}
+function slerp(a, b, f) {
+  const d = Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1)); if (d < 1e-6) return a
+  const s = Math.sin(d), k1 = Math.sin((1 - f) * d) / s, k2 = Math.sin(f * d) / s
+  return [a[0] * k1 + b[0] * k2, a[1] * k1 + b[1] * k2, a[2] * k1 + b[2] * k2]
+}
+
+function init() {
+  S = window.SPEC
+  W = S.width; H = S.height
+  const c = document.getElementById('c'); c.width = W; c.height = H; ctx = c.getContext('2d')
+  landMask = buildMask(window.LAND)
+  const top = Math.max(0, Math.min(4, Math.ceil(Math.log2(Math.max(S.zoom, S.zoomFrom, 1)) + 0.5)))
+  dots = []; for (let L = 0; L <= top; L++) dots.push(buildDots(S.dots * Math.pow(4, L)))
+  const all = [S.from, ...S.to]
+  if (!S.focus) { const m = all.reduce((a, p) => [a[0] + p.lat / all.length, a[1] + p.lon / all.length], [0, 0]); S.focus = m }
+  S.arcs = S.to.map((p, i) => ({ a: vec(S.from.lat, S.from.lon), b: vec(p.lat, p.lon), p, start: S.arcStart + i * S.arcStagger,
+    h: S.arcHeight * Math.min(1, Math.acos(clamp(vec(S.from.lat, S.from.lon).reduce((s, v, k) => s + v * vec(p.lat, p.lon)[k], 0), -1, 1)) / 0.35) }))
+  return { dots: dots.map((d) => d.length / 3).join(' / ') }
+}
+
+let placed = []
+function draw(t) {
+  placed = []
+  ctx.clearRect(0, 0, W, H)
+  if (S.background !== 'transparent') { ctx.fillStyle = S.background; ctx.fillRect(0, 0, W, H) }
+  // camera: spin into the focus while zooming in
+  const k = inOutCubic(seg(t, 0, S.settle))
+  const lat0 = S.focus[0] - S.tiltFrom * (1 - k), lon0 = S.focus[1] - S.spinFrom * (1 - k)
+  const zoom = S.zoomFrom + (S.zoom - S.zoomFrom) * k
+  const R = Math.min(W, H) * 0.42 * zoom, cx = W / 2, cy = H * S.centerY + (zoom > 1 ? 0 : 0)
+  const view = viewer(lat0, lon0)
+  const P = (v) => { const [x, y, d] = view(v); return [cx + R * x, cy - R * y, d] }
+
+  // ocean disc + atmosphere rim
+  const g = ctx.createRadialGradient(cx - R * 0.3, cy - R * 0.35, R * 0.1, cx, cy, R)
+  g.addColorStop(0, S.ocean[0]); g.addColorStop(1, S.ocean[1])
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.fill()
+  const rim = ctx.createRadialGradient(cx, cy, R * 0.92, cx, cy, R * 1.12)
+  rim.addColorStop(0, 'rgba(0,0,0,0)'); rim.addColorStop(0.45, S.rim); rim.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.fillStyle = rim; ctx.beginPath(); ctx.arc(cx, cy, R * 1.12, 0, 7); ctx.fill()
+
+  // land dots, brighter and bigger towards the viewer; levels cross-fade with the zoom
+  ctx.fillStyle = S.dot
+  const lz = Math.log2(Math.max(zoom, 1))
+  dots.forEach((pts, L) => {
+    const w = L === 0 ? clamp(1 - (lz - L)) : clamp(1 - Math.abs(lz - L)); if (w <= 0) return
+    const dr = S.dotSize * Math.max(zoom, 1) / Math.pow(2, L)
+    for (let i = 0; i < pts.length; i += 3) {
+      const [x, y, d] = view([pts[i], pts[i + 1], pts[i + 2]]); if (d <= 0.02) continue
+      const sx = cx + R * x, sy = cy - R * y
+      if (sx < -10 || sx > W + 10 || sy < -10 || sy > H + 10) continue
+      ctx.globalAlpha = w * (0.25 + 0.75 * d)
+      ctx.fillRect(sx - dr * (0.5 + 0.5 * d), sy - dr * (0.5 + 0.5 * d), dr * (1 + d), dr * (1 + d))
+    }
+  })
+  ctx.globalAlpha = 1
+
+  // arcs
+  const labels = []
+  for (const a of S.arcs) {
+    const f = outCubic(seg(t, a.start, S.arcDraw)); if (f <= 0) continue
+    const tail = S.trail ? clamp(f - 0.35) : 0
+    const N = 64, pts = []
+    for (let i = 0; i <= N; i++) {
+      const u = tail + (f - tail) * (i / N), v = slerp(a.a, a.b, u), lift = 1 + a.h * Math.sin(Math.PI * u)
+      const [x, y, d] = view(v.map((c) => c * lift)); const hidden = d < 0 && x * x + y * y < 1
+      pts.push([cx + R * x, cy - R * y, hidden, u])
+    }
+    // screen-space bow, so arcs stay curved even when they run across the middle of the globe
+    const A = P(a.a), B = P(a.b), dx = B[0] - A[0], dy = B[1] - A[1], len = Math.hypot(dx, dy) || 1
+    const side = (B[0] < A[0] ? -1 : 1) * S.bend * len
+    for (const q of pts) { const b = Math.sin(Math.PI * q[3]) * side; q[0] += (-dy / len) * b; q[1] += (dx / len) * b }
+    for (const [w, al] of [[S.arcWidth * 4, 0.18], [S.arcWidth, 1]]) {
+      ctx.strokeStyle = S.accent; ctx.globalAlpha = al; ctx.lineWidth = w; ctx.lineCap = 'round'
+      ctx.beginPath(); let pen = false
+      for (const [x, y, h] of pts) { if (h) { pen = false; continue } pen ? ctx.lineTo(x, y) : ctx.moveTo(x, y); pen = true }
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+    const head = pts[pts.length - 1]
+    if (f < 1 && !head[2]) { ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(head[0], head[1], S.arcWidth * 1.6, 0, 7); ctx.fill() }
+    const land = seg(t, a.start + S.arcDraw * 0.92, 0.5)
+    if (land > 0) labels.push({ p: a.p, k: land })
+  }
+  // pins
+  const pin = (p, k, big) => {
+    const [x, y, d] = P(vec(p.lat, p.lon)); if (d < 0.05) return
+    const s = outBack(clamp(k)) * (big ? 1.4 : 1)
+    const ring = (t * 0.9 + (big ? 0 : 0.4)) % 1
+    ctx.strokeStyle = S.accent; ctx.lineWidth = 3; ctx.globalAlpha = (1 - ring) * clamp(k)
+    ctx.beginPath(); ctx.arc(x, y, (10 + 34 * ring) * s, 0, 7); ctx.stroke(); ctx.globalAlpha = 1
+    ctx.fillStyle = S.accent; ctx.beginPath(); ctx.arc(x, y, 9 * s, 0, 7); ctx.fill()
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x, y, 3.6 * s, 0, 7); ctx.fill()
+    return [x, y]
+  }
+  const ok = seg(t, S.pinStart, 0.45); if (ok > 0) { const xy = pin(S.from, ok, true); if (xy && S.from.name) label(S.from.name, xy, ok, true) }
+  for (const l of labels) { const xy = pin(l.p, l.k, false); if (xy && S.labels && l.p.name) label(l.p.name, xy, l.k, false) }
+}
+
+function label(text, [x, y], k, big) {
+  const size = big ? S.labelSize * 1.15 : S.labelSize
+  ctx.font = `${big ? 700 : 600} ${size}px ${S.font}`
+  ctx.globalAlpha = clamp(k * 1.5)
+  const w = ctx.measureText(text).width, padX = size * 0.5, h = size * 1.6
+  // right of the pin unless that hits the frame edge or a label already placed; then left, above, below
+  const bw = w + padX * 2, hit = (bx, by) => bx < 30 || bx + bw > W - 30 || placed.some((r) => bx < r[0] + r[2] && bx + bw > r[0] && by < r[1] + r[3] && by + h > r[1])
+  const tries = [[x + 22, y - h / 2], [x - 22 - bw, y - h / 2], [x - bw / 2, y - 22 - h], [x - bw / 2, y + 22]]
+  let [bx, by] = tries.find(([a, b]) => !hit(a, b)) || tries[0]
+  placed.push([bx, by, bw, h]); by += (1 - outCubic(clamp(k))) * 14
+  ctx.fillStyle = big ? S.accent : 'rgba(10,14,20,0.82)'
+  ctx.beginPath(); ctx.roundRect(bx, by, w + padX * 2, h, h / 2); ctx.fill()
+  ctx.fillStyle = big ? '#111' : '#fff'; ctx.textBaseline = 'middle'; ctx.fillText(text, bx + padX, by + h / 2 + 1)
+  ctx.globalAlpha = 1
+}
+window.init = init; window.draw = draw
+</script></body></html>

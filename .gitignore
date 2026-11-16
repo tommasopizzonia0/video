@@ -26,3 +26,13 @@ examples/*.mp4
 examples/*.png
 dist-artifact
 foto/
+
+# skill di terzi: dipendenze e uscite locali
+.claude/kit/vendor/
+.claude/kit/models/
+.claude/kit/.venv/
+teardown-out/
+__pycache__/
+examples/*/*-contact.png
+examples/*/*.mp4
+examples/globe/*.png
