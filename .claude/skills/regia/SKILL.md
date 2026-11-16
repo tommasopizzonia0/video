@@ -26,7 +26,7 @@ If `context.json` is missing or older than the last change to `live/current.json
 
 ## 2. The director's brief
 
-Read `ruoli/regista.md` (your role) and write the brief it describes (genre, platform, audience, the one
+Read `ruoli/regista.md` (your role) and `ruoli/sapere/regia.md` (the director's field), and write the brief it describes (genre, platform, audience, the one
 thing to remember, the action, tone). Every arrow gets it: the same video is cut, mixed and graded
 differently if it is an ad, a tutorial or a documentary.
 
@@ -34,7 +34,8 @@ differently if it is an ad, a tutorial or a documentary.
 
 Start four agents in parallel (Agent tool, one per arrow), unless Tomm asks for a quick round, in which
 case reason as each arrow yourself, one at a time, without mixing their points of view. Each agent is a
-senior professional: tell it to read its role file first (absolute path) and to work by it:
+senior professional with the whole knowledge of its field: tell it to read its role file and the field
+map it points to (`ruoli/sapere/`, absolute paths) before anything else, and to work by them:
 
 | Arrow | Role file | Who it is |
 |---|---|---|
