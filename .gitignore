@@ -36,3 +36,5 @@ __pycache__/
 examples/*/*-contact.png
 examples/*/*.mp4
 examples/globe/*.png
+# Local live session (npm run dev, #live)
+live/

@@ -32,6 +32,9 @@ export interface MixClip {
 /** Rate of the gain curves: 100 points per second is smooth for fades and ducking. */
 const CURVE_RATE = 100
 
+/** Effects whose length follows the clip's duration. */
+const STRETCHY = new Set<SfxName>(['whoosh', 'riser', 'swoosh', 'reverse', 'beat'])
+
 export const sfxKey = (name: SfxName, length: number) => `sfx:${name}:${length.toFixed(3)}`
 
 /** Comp time of a scene's start, by id or index. */
@@ -48,7 +51,7 @@ export function audioMix(comp: Composition): MixClip[] {
   for (const a of comp.audio ?? []) {
     const at = (a.scene !== undefined ? sceneOffset(comp, a.scene) : 0) + (a.start ?? 0)
     if (a.sfx) {
-      const length = a.sfx === 'whoosh' || a.sfx === 'riser' ? (a.duration ?? SFX_LENGTH[a.sfx]) : SFX_LENGTH[a.sfx]
+      const length = STRETCHY.has(a.sfx) ? (a.duration ?? SFX_LENGTH[a.sfx]) : SFX_LENGTH[a.sfx]
       // The clip is placed so its peak lands on `start`; whatever falls before 0 is trimmed.
       const peak = synthPeak(a.sfx, length)
       const start = at - peak
