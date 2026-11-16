@@ -1,6 +1,6 @@
 // Motion studio: write or open a composition JSON, preview it frame-accurately and export it to MP4.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { audioMix, mixGraph, scheduleMix } from '../engine/audio'
 import { mixerSettings, withoutMixer, writeMixer, type MixGraph, type MixerSettings } from '../engine/mixer'
 import { AudioConsole } from './AudioConsole'
@@ -18,6 +18,7 @@ import { expandStudioWith } from '../engine/studio'
 import { applyBeatGrid } from '../engine/beatgrid'
 import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type ClaudeTarget, type LiveUpdate, type ArrowRole, ARROW_ROLES, arrowFor } from './live'
 import { StudioTimeline } from './StudioTimeline'
+import { Clock } from './clock'
 
 const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })
 const exampleAssets = import.meta.glob<string>('../../examples/assets/*', { eager: true, query: '?url', import: 'default' })
@@ -58,12 +59,6 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     media: { target: null, at: 0 },
     audio: { target: null, at: 0 },
   })
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!live) return
-    const id = setInterval(() => setNow(Date.now()), 500)
-    return () => clearInterval(id)
-  }, [live])
   const [activity, setActivity] = useState<{ id: number; note: string }[]>([])
   const codeRef = useRef<HTMLTextAreaElement>(null)
   // While watching Claude live, the JSON stays out of the way until asked for.
@@ -77,9 +72,15 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   // Errors are tied to the composition they came from, so editing clears them.
   const [failure, setFailure] = useState<{ comp: Composition | null; message: string } | null>(null)
   const [exporting, setExporting] = useState<number | null>(null)
-  const [session, setSession] = useState<{ comp: Composition; res: BrowserResources; renderer: Renderer } | null>(null)
+  const [session, setSession] = useState<{ comp: Composition; res: BrowserResources } | null>(null)
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // The canvas element as state too, so the preview renderer can be built during render.
+  const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null)
+  const canvasCallback = useCallback((el: HTMLCanvasElement | null) => {
+    canvasRef.current = el
+    setCanvasEl(el)
+  }, [])
   const fileInput = useRef<HTMLInputElement>(null)
   const jsonInput = useRef<HTMLInputElement>(null)
   const drawing = useRef(false)
@@ -88,6 +89,10 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   useEffect(() => {
     timeRef.current = time
   }, [time])
+  // While playing, the time moves on this clock only (no React renders per frame); `time` is the
+  // paused/seeked time and catches up when playback stops.
+  const [clock] = useState(() => new Clock())
+  useLayoutEffect(() => clock.set(time), [clock, time])
 
   // Parse after a short pause in typing.
   const [parsed, setParsed] = useState(() => parseComposition(text))
@@ -123,20 +128,36 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
 
   // Where the canvas sits in the stage, for the safe-zone guides drawn over it.
   const [canvasBox, setCanvasBox] = useState<{ left: number; top: number; width: number; height: number } | null>(null)
+  // The stage's size and the screen's pixel density: the preview is drawn at the size it is shown.
+  const [stageSize, setStageSize] = useState<{ width: number; height: number; dpr: number } | null>(null)
   useEffect(() => {
     const canvas = canvasRef.current
     const stage = canvas?.parentElement
     if (!canvas || !stage) return
+    let timer = 0
     const measure = () => {
       const c = canvas.getBoundingClientRect()
       const s = stage.getBoundingClientRect()
-      setCanvasBox({ left: c.left - s.left, top: c.top - s.top, width: c.width, height: c.height })
+      setCanvasBox((prev) =>
+        prev && prev.left === c.left - s.left && prev.top === c.top - s.top && prev.width === c.width && prev.height === c.height
+          ? prev
+          : { left: c.left - s.left, top: c.top - s.top, width: c.width, height: c.height },
+      )
+      // Resizing the window re-creates the preview renderer: wait for the size to settle.
+      clearTimeout(timer)
+      timer = window.setTimeout(() => {
+        const next = { width: Math.round(stage.clientWidth), height: Math.round(stage.clientHeight), dpr: window.devicePixelRatio || 1 }
+        setStageSize((prev) => (prev && prev.width === next.width && prev.height === next.height && prev.dpr === next.dpr ? prev : next))
+      }, 120)
     }
     const ro = new ResizeObserver(measure)
     ro.observe(canvas)
     ro.observe(stage)
     measure()
-    return () => ro.disconnect()
+    return () => {
+      ro.disconnect()
+      clearTimeout(timer)
+    }
   }, [])
 
   // The audio console's settings: from the JSON, or the control being dragged right now.
@@ -195,10 +216,9 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         }
         // Scene lengths in beats become seconds once the beat times are loaded.
         const timed = expandStudioWith(comp.beats ? applyBeatGrid(comp, res.beats(comp.beats.asset) ?? []) : comp, res)
-        const renderer = new Renderer(canvasRef.current!, timed, res, { scale: Math.min(1, 1280 / Math.max(comp.width, comp.height)) })
         setSession((prev) => {
           void prev?.res.dispose()
-          return { comp: timed, res, renderer }
+          return { comp: timed, res }
         })
         setStatus(null)
       })
@@ -213,13 +233,32 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     }
   }, [loadKey, resolve])
 
-  const duration = session?.renderer.duration ?? 0
+  // The preview renderer draws at the size the canvas is shown on screen (at most 1280 px, as
+  // before): the picture looks the same, with far fewer pixels to draw, blur and grade per frame.
+  // Export has its own full-size renderer, so the MP4 does not change.
+  const preview = useMemo(() => {
+    if (!session || !canvasEl) return null
+    const { width: W, height: H } = session.comp
+    const maxScale = Math.min(1, 1280 / Math.max(W, H))
+    let scale = maxScale
+    let css: { width: number; height: number } | null = null
+    if (stageSize && stageSize.width > 0 && stageSize.height > 0) {
+      // Shown size: fit in the stage, never larger than the full 1280 px preview (as before).
+      const fit = Math.min(stageSize.width / W, stageSize.height / H, maxScale)
+      css = { width: W * fit, height: H * fit }
+      scale = Math.min(maxScale, Math.max(0.05, fit * stageSize.dpr))
+    }
+    return { renderer: new Renderer(canvasEl, session.comp, session.res, { scale }), css }
+  }, [session, stageSize, canvasEl])
+  const renderer = preview?.renderer ?? null
+
+  const duration = renderer?.duration ?? 0
 
   // One draw at a time; while one runs, only the latest requested time is kept.
   const pending = useRef<number | null>(null)
   const draw = useCallback(
     async (t: number) => {
-      if (!session) return
+      if (!session || !renderer) return
       if (drawing.current) {
         pending.current = t
         return
@@ -230,14 +269,14 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         while (next !== null) {
           pending.current = null
           await session.res.prepare(videoRequests(session.comp, next))
-          session.renderer.draw(next)
+          renderer.draw(next)
           next = pending.current
         }
       } finally {
         drawing.current = false
       }
     },
-    [session],
+    [session, renderer],
   )
 
   useEffect(() => {
@@ -252,7 +291,9 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     void p.audio?.close()
     playback.current = null
     setPlaying(false)
-  }, [])
+    // The time shown while playing becomes the paused time.
+    setTime(clock.get())
+  }, [clock])
 
   // Live: Claude's edits replace the JSON as they arrive, and can jump to the part being changed.
   useEffect(() => {
@@ -361,7 +402,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const history = useRef<string[]>([])
 
   /** Replaces the composition text and, on the local live page, saves it for Claude. */
-  const commit = (json: string, note: string) => {
+  const commit = useCallback((json: string, note: string) => {
     setText(json)
     setActivity((a) => [{ id: Date.now(), note }, ...a].slice(0, 6))
     if (live) {
@@ -371,7 +412,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         // Not valid JSON: nothing to save.
       }
     }
-  }
+  }, [live])
 
   const deleteClip = (key: string) => {
     let comp: Composition
@@ -407,29 +448,50 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   }
 
   /** Writes the console's settings into the JSON (no reload: playback goes on). */
-  const commitMixer = (m: MixerSettings, note: string) => {
-    let comp: Composition
-    try {
-      comp = JSON.parse(textRef.current) as Composition
-    } catch {
-      setFailure({ comp: null, message: 'Il JSON ha un errore: correggilo prima di usare la console audio.' })
-      return
-    }
-    setMixerDraft(m)
-    commit(JSON.stringify(writeMixer(comp, m), null, 2), note)
-  }
+  const commitMixer = useCallback(
+    (m: MixerSettings, note: string) => {
+      let comp: Composition
+      try {
+        comp = JSON.parse(textRef.current) as Composition
+      } catch {
+        setFailure({ comp: null, message: 'Il JSON ha un errore: correggilo prima di usare la console audio.' })
+        return
+      }
+      setMixerDraft(m)
+      commit(JSON.stringify(writeMixer(comp, m), null, 2), note)
+    },
+    [commit],
+  )
 
   /** Other audio changes from the console (role, fades, loudness, ducking). */
-  const editComp = (edit: (c: Composition) => void, note: string) => {
-    let comp: Composition
-    try {
-      comp = JSON.parse(textRef.current) as Composition
-    } catch {
-      return
-    }
-    edit(comp)
-    commit(JSON.stringify(comp, null, 2), note)
-  }
+  const editComp = useCallback(
+    (edit: (c: Composition) => void, note: string) => {
+      let comp: Composition
+      try {
+        comp = JSON.parse(textRef.current) as Composition
+      } catch {
+        return
+      }
+      edit(comp)
+      commit(JSON.stringify(comp, null, 2), note)
+    },
+    [commit],
+  )
+
+  // The console's meters read the playing mix; the timeline's callbacks stay the same between
+  // renders so neither re-renders when unrelated studio state changes.
+  const getLevels = useCallback(() => {
+    const g = playback.current?.graph
+    return g ? { levels: g.levels(), reduction: g.reduction() } : null
+  }, [])
+  const selectStrip = useCallback((id: string) => {
+    setMixerStrip(id)
+    if (/^a\d+$/.test(id)) setSelectedClip(id)
+  }, [])
+  const selectClip = useCallback((key: string | null) => {
+    setSelectedClip(key)
+    if (key && /^a\d+$/.test(key)) setMixerStrip(key)
+  }, [])
 
   const undo = () => {
     const prev = history.current.pop()
@@ -443,6 +505,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     if (follow && u) setText(u.json)
   }
 
+  const decoded = useRef<{ session: object; buffers: Promise<Map<string, AudioBuffer>> } | null>(null)
   const play = useCallback(async () => {
     if (!session || playback.current) return
     const from = timeRef.current >= duration - 0.05 ? 0 : timeRef.current
@@ -453,7 +516,13 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       const audio = new AudioContext()
       state.audio = audio
       const mix = audioMix(session.comp)
-      const buffers = await session.res.audioBuffers(audio, undefined, mix)
+      // Sounds are decoded once per loaded composition, not at every press of play.
+      let cached = decoded.current
+      if (cached?.session !== session) {
+        cached = { session, buffers: session.res.audioBuffers(audio, undefined, mix) }
+        decoded.current = cached
+      }
+      const buffers = await cached.buffers
       if (playback.current !== state) return
       state.graph = mixGraph(audio, session.comp, mix, mixerRef.current, true)
       state.sources = scheduleMix(audio, mix, buffers, from, state.graph)
@@ -463,16 +532,16 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       if (playback.current !== state) return
       const t = from + (performance.now() - started) / 1000
       if (t >= duration) {
-        setTime(duration)
+        clock.set(duration)
         stop()
         return
       }
-      setTime(t)
+      clock.set(t)
       void draw(t)
       state.raf = requestAnimationFrame(tick)
     }
     state.raf = requestAnimationFrame(tick)
-  }, [session, duration, draw, stop])
+  }, [session, duration, draw, stop, clock])
 
   useEffect(() => stop, [stop, session])
 
@@ -491,7 +560,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         undo()
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         stop()
-        const fps = session?.renderer.fps ?? 30
+        const fps = renderer?.fps ?? 30
         const step = e.shiftKey ? 1 : 1 / fps
         setTime((t) => Math.max(0, Math.min(duration, t + (e.key === 'ArrowLeft' ? -step : step))))
       }
@@ -586,7 +655,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     if (!body || !stageRef.current) return
     setSendState('sending')
     try {
-      const ok = await sendToClaude(stageRef.current, `[al secondo ${time.toFixed(1)}] ${body}`)
+      const ok = await sendToClaude(stageRef.current, `[al secondo ${clock.get().toFixed(1)}] ${body}`)
       setSendState(ok ? 'sent' : 'unavailable')
       if (ok) setMessage('')
     } catch {
@@ -594,6 +663,34 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     }
   }
 
+
+  const seek = useCallback(
+    (t: number) => {
+      stop()
+      setTime(t)
+    },
+    [stop],
+  )
+  const playRef = useRef(play)
+  const addMediaRef = useRef(addMedia)
+  useLayoutEffect(() => {
+    playRef.current = play
+    addMediaRef.current = addMedia
+  })
+  const togglePlay = useCallback(() => (playback.current ? stop() : void playRef.current()), [stop])
+  const dropMedia = useCallback((item: MediaItem, t: number) => void addMediaRef.current(item, t), [])
+  const mixerToggle = useMemo(
+    () => (
+      <button
+        className={`ac-toggle${showMixer ? ' open' : ''}`}
+        title={showMixer ? 'Chiudi la console audio' : 'Apri la console audio: volumi, EQ, compressore, pan, effetti'}
+        onClick={() => setShowMixer((v) => !v)}
+      >
+        <span className="ac-toggle-arrow">{showMixer ? '◀' : '▶'}</span> Audio
+      </button>
+    ),
+    [showMixer],
+  )
 
   const issues: Issue[] = parsed.issues
   const loadError = missing.length
@@ -714,7 +811,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
           </div>
         )}
         <div className="stage" ref={stageRef}>
-          <canvas ref={canvasRef} />
+          <canvas ref={canvasCallback} style={preview?.css ? { width: preview.css.width, height: preview.css.height } : undefined} />
           {guides && session && canvasBox && <SafeZone comp={session.comp} box={canvasBox} />}
           {live && activity.length > 0 && (
             <ol className="claude-activity">
@@ -759,44 +856,24 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
           onDraft={setMixerDraft}
           onCommit={commitMixer}
           onEdit={editComp}
-          getLevels={() => {
-            const g = playback.current?.graph
-            return g ? { levels: g.levels(), reduction: g.reduction() } : null
-          }}
+          getLevels={getLevels}
           selected={mixerStrip}
-          onSelect={(id) => {
-            setMixerStrip(id)
-            if (/^a\d+$/.test(id)) setSelectedClip(id)
-          }}
+          onSelect={selectStrip}
         />
       )}
       <StudioTimeline
-        leading={
-          <button
-            className={`ac-toggle${showMixer ? ' open' : ''}`}
-            title={showMixer ? 'Chiudi la console audio' : 'Apri la console audio: volumi, EQ, compressore, pan, effetti'}
-            onClick={() => setShowMixer((v) => !v)}
-          >
-            <span className="ac-toggle-arrow">{showMixer ? '◀' : '▶'}</span> Audio
-          </button>
-        }
+        leading={mixerToggle}
         comp={session?.comp ?? null}
         res={session?.res ?? null}
-        time={time}
+        clock={clock}
         duration={duration}
-        fps={session?.renderer.fps ?? 30}
+        fps={renderer?.fps ?? 30}
         playing={playing}
-        onSeek={(t) => {
-          stop()
-          setTime(t)
-        }}
-        onTogglePlay={() => (playing ? stop() : void play())}
-        onDropMedia={showLibrary ? (item, t) => void addMedia(item, t) : undefined}
+        onSeek={seek}
+        onTogglePlay={togglePlay}
+        onDropMedia={showLibrary ? dropMedia : undefined}
         selected={selectedClip}
-        onSelect={(key) => {
-          setSelectedClip(key)
-          if (key && /^a\d+$/.test(key)) setMixerStrip(key)
-        }}
+        onSelect={selectClip}
       />
       </div>
 
@@ -812,7 +889,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
             canvas={canvasRef}
             at={arrows[role].target}
             note={arrows[role].note}
-            active={now - arrows[role].at < 6000}
+            movedAt={arrows[role].at}
           />
         ))}
 
@@ -883,13 +960,20 @@ function parking(role: ArrowRole, canvas: HTMLCanvasElement | null): { left: num
  * One of Claude's arrows: it glides to what Claude is working on in its area (the frame, the
  * timeline, or the uploads), says what it is doing, and waits at the edge of its area otherwise.
  */
-function ClaudeCursor({ role, comp, canvas, at, note, active }: { role: ArrowRole; comp: Composition; canvas: RefObject<HTMLCanvasElement | null>; at: ClaudeTarget | null; note?: string; active: boolean }) {
+const ClaudeCursor = memo(function ClaudeCursor({ role, comp, canvas, at, note, movedAt }: { role: ArrowRole; comp: Composition; canvas: RefObject<HTMLCanvasElement | null>; at: ClaudeTarget | null; note?: string; movedAt: number }) {
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  // Lit up for 6 s after it moves (its own timer: the studio does not re-render for it).
+  const [expired, setExpired] = useState(0)
+  const active = movedAt > 0 && expired !== movedAt
+  useEffect(() => {
+    if (!movedAt) return
+    const id = setTimeout(() => setExpired(movedAt), Math.max(0, 6000 - (Date.now() - movedAt)))
+    return () => clearTimeout(id)
+  }, [movedAt])
   // A clip or file it points at is brought into view once (as soon as it exists on the page),
   // then followed as the layout moves.
   const scrolledFor = useRef<ClaudeTarget | null>(null)
   useEffect(() => {
-    let raf = 0
     const tick = () => {
       if (at && at !== scrolledFor.current && ('clip' in at || 'media' in at || 'channel' in at)) {
         const key = 'clip' in at ? at.clip : 'media' in at ? `media:${at.media}` : `channel:${at.channel}`
@@ -901,10 +985,12 @@ function ClaudeCursor({ role, comp, canvas, at, note, active }: { role: ArrowRol
       }
       const p = (at && locate(at, comp, canvas.current)) ?? parking(role, canvas.current)
       setPos((prev) => (prev && p && Math.abs(prev.left - p.left) < 0.5 && Math.abs(prev.top - p.top) < 0.5 ? prev : p))
-      raf = requestAnimationFrame(tick)
     }
+    // Ten checks a second are plenty: the arrow glides to its spot with a CSS transition anyway, and
+    // reading the layout every frame (four arrows) forced the page to lay out again mid-frame.
     tick()
-    return () => cancelAnimationFrame(raf)
+    const id = setInterval(tick, 100)
+    return () => clearInterval(id)
   }, [at, comp, canvas, role])
   if (!pos) return null
   const style = ARROW_STYLE[role]
@@ -930,7 +1016,8 @@ function ClaudeCursor({ role, comp, canvas, at, note, active }: { role: ArrowRol
       </span>
     </div>
   )
-}
+})
+
 function SafeZone({ comp, box }: { comp: Composition; box: { left: number; top: number; width: number; height: number } }) {
   const p = platformFor(comp)
   const [l, t, r, b] = p.safe

@@ -708,6 +708,8 @@ h3 {
 .claude-cursor svg {
   display: block;
   animation: claude-cursor-bob 1.8s ease-in-out infinite;
+  /* Its own layer: the endless bob runs on the compositor instead of repainting the arrow. */
+  will-change: transform;
 }
 .claude-cursor-label {
   position: absolute;
@@ -1026,6 +1028,8 @@ h3 {
   margin-left: -1px;
   background: #fff;
   pointer-events: none;
+  /* Moved with a transform every frame while playing: the compositor moves it, no relayout. */
+  will-change: transform;
 }
 .tl-playhead i {
   position: absolute;
