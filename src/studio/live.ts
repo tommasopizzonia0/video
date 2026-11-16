@@ -10,7 +10,7 @@ export interface LiveUpdate {
   time?: number
   /** Where Claude's arrow points (routed to the arrow of that area, see `arrowFor`). */
   cursor?: ClaudeTarget
-  /** Several arrows at once, each with its own note: `{ video, timeline, media }`. */
+  /** Several arrows at once, each with its own note: `{ video, timeline, media, audio }`. */
   arrows?: Partial<Record<ArrowRole, { target: ClaudeTarget; note?: string }>>
 }
 
@@ -19,15 +19,17 @@ export interface LiveUpdate {
  * `{ clip, edge? }`: a timeline clip, by scene id ("foto") or layer id/label ("POLLO"), optionally its
  * "start" or "end" edge (where a trim happens).
  * `{ media }`: a file in the Caricamenti panel, by name ("ulivi-vaso-5s-720p.mp4").
+ * `{ channel }`: a strip of the audio console: "a0" (audio entry 0), "v0" (video sound 0),
+ * "bus:music" / "bus:voice" / "bus:sfx" / "bus:video", or "master".
  */
-export type ClaudeTarget = { x: number; y: number } | { clip: string; edge?: 'start' | 'end' } | { media: string }
+export type ClaudeTarget = { x: number; y: number } | { clip: string; edge?: 'start' | 'end' } | { media: string } | { channel: string }
 
-/** Claude has one arrow per area: the frame, the timeline (cuts, clips, audio) and the uploads. */
-export type ArrowRole = 'video' | 'timeline' | 'media'
-export const ARROW_ROLES: ArrowRole[] = ['video', 'timeline', 'media']
+/** Claude has one arrow per area: the frame, the timeline (cuts, clips), the uploads and the audio console. */
+export type ArrowRole = 'video' | 'timeline' | 'media' | 'audio'
+export const ARROW_ROLES: ArrowRole[] = ['video', 'timeline', 'media', 'audio']
 
 export function arrowFor(t: ClaudeTarget): ArrowRole {
-  return 'clip' in t ? 'timeline' : 'media' in t ? 'media' : 'video'
+  return 'clip' in t ? 'timeline' : 'media' in t ? 'media' : 'channel' in t ? 'audio' : 'video'
 }
 
 function readCursor(v: unknown): ClaudeTarget | undefined {
@@ -35,6 +37,7 @@ function readCursor(v: unknown): ClaudeTarget | undefined {
   const c = v as Record<string, unknown>
   if (typeof c.clip === 'string') return { clip: c.clip, edge: c.edge === 'start' || c.edge === 'end' ? c.edge : undefined }
   if (typeof c.media === 'string') return { media: c.media }
+  if (typeof c.channel === 'string') return { channel: c.channel }
   return typeof c.x === 'number' && typeof c.y === 'number' ? { x: c.x, y: c.y } : undefined
 }
 

@@ -383,6 +383,37 @@ or fix mixed light (a face lit by a window and a lamp) — that is done on set.
   (0.45 s), `threshold` (-45 dBFS). The music dips while someone speaks, holds through short pauses,
   and is already down when the first word lands. `false` turns it off.
 
+### Audio console (`mixer`)
+
+The studio's **Audio** button (bottom-left of the timeline) opens a desk-style console. Every
+`audio` entry is a strip (A1, A2…), every video layer with sound too (V1…); each goes through the
+bus of its role (Musica, Voce, Effetti, Audio video) and then the master. A strip's chain, in order:
+low/high cut, 3-band EQ, compressor, pan, fader, then post-fader sends to a shared reverb and echo.
+What it sets is saved in the JSON, so the CLI and the export sound like the preview:
+
+```json
+{ "asset": "voce", "role": "voice", "mixer": {
+    "gain": -2, "pan": 0, "mute": false, "solo": false,
+    "eq": { "lowCut": 80, "low": -2, "mid": 2.5, "midFreq": 2800, "high": 1.5, "highCut": 0 },
+    "dynamics": { "threshold": -22, "ratio": 3.5, "attack": 0.01, "release": 0.25, "makeup": 3 },
+    "reverb": 0.1, "delay": 0 } }
+```
+
+- `gain`: fader in dB (0 = unchanged, max +12, -60 or less = silent); `pan` -1..1.
+- `mute`, `solo`: as on a desk; when any strip of a row is soloed, only the soloed ones play.
+- `eq`: `low` (shelf at 100 Hz), `mid` (bell at `midFreq`), `high` (shelf at 8 kHz) in dB;
+  `lowCut`/`highCut` in Hz (0 = off). `bypass: true` keeps the values but switches it off.
+- `dynamics`: a compressor, on while set (`bypass: true` switches it off).
+- `reverb`, `delay`: send levels 0..1 to the shared effects.
+- Video layers take the same `mixer` object. The buses and the master live in `mix`:
+  `"mix": { "buses": { "music": { "gain": -3 }, "voice": {...}, "sfx": {...}, "video": {...} },
+  "master": { "gain": 0, "limiter": true }, "fx": { "reverb": 2.2, "delay": 0.32, "feedback": 0.35 } }`
+  (`limiter` holds peaks under -1 dB; `fx.reverb` is the tail in seconds, `fx.delay` the echo time).
+- The loudness target (`mix.loudness`) still applies after the master, so the master fader sets the
+  balance against the limiter, not the final level of the export.
+- On the live page Claude's fourth arrow, **Audio**, points at a strip with
+  `{ "channel": "a0" }` (or `"v0"`, `"bus:music"`, `"master"`).
+
 ## Cutting on the music
 
 `npm run beats -- music.mp3` writes `music.beats.json` next to the file and prints the tempo, how

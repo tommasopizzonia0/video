@@ -13,7 +13,8 @@ import {
   canEncodeAudio,
   canEncodeVideo,
 } from 'mediabunny'
-import { audioMix, scheduleMix } from './audio'
+import { audioMix, mixGraph, scheduleMix } from './audio'
+import type { MixerSettings } from './mixer'
 import { DEFAULT_LOUDNESS, normalizationGain } from './loudness'
 import { Renderer, videoRequests } from './render'
 import type { BrowserResources } from './resources'
@@ -23,6 +24,7 @@ export interface ExportOptions {
   scale?: number
   onProgress?: (fraction: number) => void
   signal?: AbortSignal
+  mixer?: MixerSettings
 }
 
 let aacRegistered = false
@@ -34,6 +36,8 @@ export interface RenderAudioOptions {
   audioSrc?: (src: string) => string | undefined
   /** Normalize to the composition's loudness target (default true). */
   normalize?: boolean
+  /** The audio console's settings, when newer than the ones in `comp` (default: from `comp`). */
+  mixer?: MixerSettings
 }
 
 /** Renders the comp's sound to a sample-accurate buffer, normalized to `mix.loudness` (default -14 LUFS). */
@@ -46,7 +50,7 @@ export async function renderAudio(comp: Composition, res: BrowserResources, dura
   if (!buffers.size && !mix.some((c) => c.sfx)) return null
   // Say so instead of exporting a silent track (the CLI prints page errors).
   for (const id of new Set(mix.flatMap((c) => (c.asset && c.role !== 'video' && !buffers.has(c.asset) ? [c.asset] : [])))) console.error(`audio "${id}" non decodificato: nel video sarà muto`)
-  scheduleMix(ctx, mix, buffers, options.from ?? 0)
+  scheduleMix(ctx, mix, buffers, options.from ?? 0, mixGraph(ctx, comp, mix, options.mixer))
   const out = await ctx.startRendering()
   const target = comp.mix?.loudness ?? DEFAULT_LOUDNESS
   if (options.normalize !== false && target !== false) {
@@ -71,7 +75,7 @@ export async function exportVideo(comp: Composition, res: BrowserResources, opti
   const video = new CanvasSource(canvas, { codec: mp4 ? 'avc' : 'vp9', quality: QUALITY_VERY_HIGH, keyFrameInterval: 2 })
   output.addVideoTrack(video, { frameRate: fps })
 
-  const audio = await renderAudio(comp, res, frames / fps)
+  const audio = await renderAudio(comp, res, frames / fps, { mixer: options.mixer })
   let audioSource: AudioBufferSource | null = null
   if (audio) {
     const codec = mp4 ? 'aac' : 'opus'
