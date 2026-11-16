@@ -66,6 +66,8 @@ interface VideoAsset {
   sink: CanvasSink
   width: number
   height: number
+  /** Seconds. */
+  duration: number
   readers: VideoReader[]
 }
 
@@ -173,7 +175,8 @@ export class BrowserResources implements Resources {
     if (!track) throw new Error('no video track')
     if (!(await track.canDecode())) throw new Error(`this browser cannot decode ${track.codec ?? 'this codec'}`)
     const sink = new CanvasSink(track, { poolSize: 6, fit: 'fill' })
-    return { input, sink, width: track.displayWidth, height: track.displayHeight, readers: [] }
+    const duration = await input.computeDuration().catch(() => 0)
+    return { input, sink, width: track.displayWidth, height: track.displayHeight, duration, readers: [] }
   }
 
   /** Decodes the video frames a draw needs. Several requests for one asset get separate decoders. */
@@ -216,6 +219,11 @@ export class BrowserResources implements Resources {
   videoSize(asset: string) {
     const v = this.videos.get(asset)
     return v ? { width: v.width, height: v.height } : null
+  }
+
+  /** Length of a video asset in seconds (0 when unknown). */
+  videoDuration(asset: string): number {
+    return this.videos.get(asset)?.duration ?? 0
   }
 
   pathLength(d: string): number {
