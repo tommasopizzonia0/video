@@ -1,19 +1,21 @@
 // Motion studio: write or open a composition JSON, preview it frame-accurately and export it to MP4.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { audioMix, scheduleMix } from '../engine/audio'
 import { platformFor } from '../engine/check'
 import { exportVideo } from '../engine/export'
 import { Renderer, videoRequests } from '../engine/render'
 import { BrowserResources } from '../engine/resources'
+import type { Composition, Layer } from '../engine/types'
 import { sceneStarts } from '../engine/timeline'
-import type { Composition } from '../engine/types'
+import { MediaPanel } from './MediaPanel'
+import { hasLibrary, mediaDuration, saveLive, type MediaItem } from './library'
 import { parseComposition, type Issue } from '../engine/validate'
 import { applyVariant } from '../engine/variants'
 import { expandStudioWith } from '../engine/studio'
 import { applyBeatGrid } from '../engine/beatgrid'
-import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type LiveUpdate } from './live'
-import { formatTime } from '../timeline'
+import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type ClaudeTarget, type LiveUpdate, type ArrowRole, ARROW_ROLES, arrowFor } from './live'
+import { StudioTimeline } from './StudioTimeline'
 
 const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })
 const exampleAssets = import.meta.glob<string>('../../examples/assets/*', { eager: true, query: '?url', import: 'default' })
@@ -46,6 +48,29 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const [liveState, setLiveState] = useState<{ connected: boolean; note?: string; follow: boolean }>({ connected: false, follow: true })
   const followRef = useRef(true)
   const liveUpdate = useRef<LiveUpdate | null>(null)
+  // Claude's arrow on the frame and the last few things it said it was doing.
+  // Claude's three arrows (frame, timeline, uploads): what each points at, its note, and when it last moved.
+  const [arrows, setArrows] = useState<Record<ArrowRole, { target: ClaudeTarget | null; note?: string; at: number }>>({
+    video: { target: null, at: 0 },
+    timeline: { target: null, at: 0 },
+    media: { target: null, at: 0 },
+  })
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live) return
+    const id = setInterval(() => setNow(Date.now()), 500)
+    return () => clearInterval(id)
+  }, [live])
+  const [activity, setActivity] = useState<{ id: number; note: string }[]>([])
+  const codeRef = useRef<HTMLTextAreaElement>(null)
+  // While watching Claude live, the JSON stays out of the way until asked for.
+  const [showCode, setShowCode] = useState(!live)
+  // The media library exists on the local dev server only.
+  const showLibrary = live && hasLibrary
+  const textRef = useRef(text)
+  useEffect(() => {
+    textRef.current = text
+  }, [text])
   // Errors are tied to the composition they came from, so editing clears them.
   const [failure, setFailure] = useState<{ comp: Composition | null; message: string } | null>(null)
   const [exporting, setExporting] = useState<number | null>(null)
@@ -200,7 +225,24 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     void connectLive((u) => {
       liveUpdate.current = u
       setLiveState((s) => ({ ...s, connected: true, note: u.note }))
+      if (u.cursor || u.arrows) {
+        const at = Date.now()
+        setArrows((prev) => {
+          const next = { ...prev }
+          if (u.cursor) next[arrowFor(u.cursor)] = { target: u.cursor, note: u.note, at }
+          for (const role of ARROW_ROLES) {
+            const a = u.arrows?.[role]
+            if (a) next[role] = { target: a.target, note: a.note ?? u.note, at }
+          }
+          return next
+        })
+      }
+      if (u.note) {
+        const note = u.note
+        setActivity((a) => (a[0]?.note === note ? a : [{ id: Date.now(), note }, ...a].slice(0, 6)))
+      }
       if (!followRef.current) return
+      revealChange(codeRef.current, textRef.current, u.json)
       setText(u.json)
       if (u.time !== undefined) {
         stop()
@@ -218,6 +260,119 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       unsubscribe?.()
     }
   }, [live, stop])
+
+  /**
+   * Turns a library item into a clip: a picture or video becomes a new full-frame scene at the scene
+   * boundary nearest `at` (the end when left out), a sound joins the audio at `at`. On the local live
+   * page the result is saved to live/current.json so Claude continues from it.
+   */
+  const addMedia = async (item: MediaItem, at?: number) => {
+    let comp: Composition
+    try {
+      comp = JSON.parse(textRef.current) as Composition
+    } catch {
+      setFailure({ comp: null, message: 'Il JSON ha un errore: correggilo prima di aggiungere clip.' })
+      return
+    }
+    const kind = item.type.split('/')[0] as 'image' | 'video' | 'audio'
+    const slug = item.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'media'
+    const assets = (comp.assets ??= {})
+    const src = location.origin + item.url
+    let key = Object.keys(assets).find((k) => assets[k].src === src)
+    if (!key) {
+      key = slug
+      for (let n = 2; assets[key]; n++) key = `${slug}-${n}`
+      assets[key] = { type: kind, src }
+    }
+    const length = kind === 'image' ? 0 : await mediaDuration(item.url, item.type)
+    const scenes = (comp.scenes ??= [])
+    const starts = sceneStarts(scenes)
+    const end = scenes.length ? starts[scenes.length - 1] + scenes[scenes.length - 1].duration : 0
+    const time = at ?? end
+
+    let note: string
+    let jump = time
+    if (kind === 'audio') {
+      ;(comp.audio ??= []).push({ asset: key, start: Math.round(time * 100) / 100, ...(length ? { duration: Math.round(length * 100) / 100 } : {}) })
+      note = `Tomm ha aggiunto il suono ${item.name}`
+    } else {
+      const ids = new Set(scenes.map((s) => s.id))
+      let id = slug
+      for (let n = 2; ids.has(id); n++) id = `${slug}-${n}`
+      const duration = kind === 'video' ? Math.round(Math.min(length || 5, 15) * 100) / 100 : 3
+      const layer: Layer =
+        kind === 'video'
+          ? { type: 'video', id: item.name, asset: key }
+          : { type: 'image', id: item.name, asset: key, width: comp.width, height: comp.height, fit: 'cover', scale: [{ t: 0, v: 1.08 }, { t: duration, v: 1, ease: 'glide' }] }
+      // Before the first scene that is mostly after the drop point.
+      let index = scenes.findIndex((s, i) => starts[i] + s.duration / 2 > time)
+      if (index < 0) index = scenes.length
+      scenes.splice(index, 0, { id, duration, layers: [layer] })
+      jump = sceneStarts(scenes)[index] + Math.min(1, duration / 2)
+      note = `Tomm ha aggiunto ${item.name}`
+    }
+    const json = JSON.stringify(comp, null, 2)
+    setText(json)
+    stop()
+    setTime(jump)
+    setActivity((a) => [{ id: Date.now(), note }, ...a].slice(0, 6))
+    if (live) void saveLive({ json: comp, note, time: jump })
+  }
+
+  // Timeline selection, deleting it with Canc, and undo (Ctrl+Z) of those deletions.
+  const [selectedClip, setSelectedClip] = useState<string | null>(null)
+  const history = useRef<string[]>([])
+
+  /** Replaces the composition text and, on the local live page, saves it for Claude. */
+  const commit = (json: string, note: string) => {
+    setText(json)
+    setActivity((a) => [{ id: Date.now(), note }, ...a].slice(0, 6))
+    if (live) {
+      try {
+        void saveLive({ json: JSON.parse(json), note })
+      } catch {
+        // Not valid JSON: nothing to save.
+      }
+    }
+  }
+
+  const deleteClip = (key: string) => {
+    let comp: Composition
+    try {
+      comp = JSON.parse(textRef.current) as Composition
+    } catch {
+      return
+    }
+    const scenes = comp.scenes ?? []
+    let removed: string | undefined
+    let m: RegExpExecArray | null
+    if ((m = /^scene-(\d+)$/.exec(key))) {
+      const [scene] = scenes.splice(Number(m[1]), 1)
+      if (scene) {
+        removed = `la scena ${scene.id ?? Number(m[1]) + 1}`
+        // Sounds cued on that scene go with it.
+        if (comp.audio) comp.audio = comp.audio.filter((a) => a.scene === undefined || (a.scene !== scene.id && a.scene !== Number(m![1])))
+      }
+    } else if ((m = /^s(\d+)-(\d+)$/.exec(key))) {
+      const [layer] = scenes[Number(m[1])]?.layers.splice(Number(m[2]), 1) ?? []
+      if (layer) removed = layer.id ?? (layer.type === 'text' ? `il testo "${layer.text.replace(/[{}]/g, '')}"` : layer.type)
+    } else if ((m = /^top-(\d+)$/.exec(key))) {
+      const [layer] = comp.layers?.splice(Number(m[1]), 1) ?? []
+      if (layer) removed = layer.id ?? layer.type
+    } else if ((m = /^a(\d+)$/.exec(key))) {
+      const [clip] = comp.audio?.splice(Number(m[1]), 1) ?? []
+      if (clip) removed = `il suono ${clip.sfx ?? clip.asset ?? ''}`.trim()
+    }
+    if (!removed) return
+    history.current.push(textRef.current)
+    setSelectedClip(null)
+    commit(JSON.stringify(comp, null, 2), `Tomm ha cancellato ${removed} (Ctrl+Z per annullare)`)
+  }
+
+  const undo = () => {
+    const prev = history.current.pop()
+    if (prev !== undefined) commit(prev, 'Tomm ha annullato la cancellazione')
+  }
 
   const setFollow = (follow: boolean) => {
     followRef.current = follow
@@ -265,6 +420,12 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         e.preventDefault()
         if (playback.current) stop()
         else void play()
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedClip) {
+        e.preventDefault()
+        deleteClip(selectedClip)
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && history.current.length) {
+        e.preventDefault()
+        undo()
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         stop()
         const fps = session?.renderer.fps ?? 30
@@ -274,7 +435,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [play, stop, session, duration])
+  })
 
   // Files shared on the live page: fetched once and used like dropped files.
   useEffect(() => {
@@ -370,11 +531,6 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     }
   }
 
-  const scenes = useMemo(() => {
-    const list = session?.comp.scenes ?? []
-    const starts = sceneStarts(list)
-    return list.map((s, i) => ({ start: starts[i], label: s.id ?? `Scena ${i + 1}` }))
-  }, [session])
 
   const issues: Issue[] = parsed.issues
   const loadError = missing.length
@@ -385,7 +541,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
 
   return (
     <div
-      className="studio"
+      className={`studio${showCode ? '' : ' no-code'}${showLibrary ? ' with-library' : ''}`}
       onDragOver={(e) => e.preventDefault()}
       onDrop={(e) => {
         e.preventDefault()
@@ -413,6 +569,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
               Segui Claude
             </label>
           )}
+          {live && <button onClick={() => setShowCode((v) => !v)}>{showCode ? 'Nascondi JSON' : 'Mostra JSON'}</button>}
           {variantNames.length > 0 && (
             <label className="field-inline" title="I formati definiti in &quot;variants&quot;">
               Formato
@@ -458,6 +615,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
 
       <section className="code-panel">
         <textarea
+          ref={codeRef}
           className="code"
           spellCheck={false}
           value={text}
@@ -495,44 +653,17 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         <div className="stage" ref={stageRef}>
           <canvas ref={canvasRef} />
           {guides && session && canvasBox && <SafeZone comp={session.comp} box={canvasBox} />}
+          {live && activity.length > 0 && (
+            <ol className="claude-activity">
+              {activity.map((a) => (
+                <li key={a.id}>{a.note}</li>
+              ))}
+            </ol>
+          )}
           {status && <div className="stage-empty">{status}</div>}
         </div>
-        <div className="transport">
-          <button onClick={() => (playing ? stop() : void play())} className="play" disabled={!session} title="Play/Pausa (spazio)">
-            {playing ? '⏸' : '▶'}
-          </button>
-          <span className="timecode">
-            {formatTime(time)} / {formatTime(duration)}
-          </span>
-          <input
-            className="scrub"
-            type="range"
-            min={0}
-            max={duration || 1}
-            step={1 / (session?.renderer.fps ?? 30)}
-            value={time}
-            onChange={(e) => {
-              stop()
-              setTime(Number(e.target.value))
-            }}
-          />
-        </div>
-        {scenes.length > 1 && (
-          <div className="scene-chips">
-            {scenes.map((s) => (
-              <button
-                key={s.start + s.label}
-                onClick={() => {
-                  stop()
-                  setTime(s.start)
-                }}
-              >
-                {s.label} <span>{formatTime(s.start)}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        {live && (
+        {/* Messages to Claude go through the claude.ai page; on the local dev server Tomm writes in the chat. */}
+        {live && import.meta.env.MODE === 'artifact' && (
           <form
             className="ask"
             onSubmit={(e) => {
@@ -557,6 +688,39 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         )}
       </main>
 
+      <StudioTimeline
+        comp={session?.comp ?? null}
+        res={session?.res ?? null}
+        time={time}
+        duration={duration}
+        fps={session?.renderer.fps ?? 30}
+        playing={playing}
+        onSeek={(t) => {
+          stop()
+          setTime(t)
+        }}
+        onTogglePlay={() => (playing ? stop() : void play())}
+        onDropMedia={showLibrary ? (item, t) => void addMedia(item, t) : undefined}
+        selected={selectedClip}
+        onSelect={setSelectedClip}
+      />
+
+      {showLibrary && <MediaPanel onAdd={(item) => void addMedia(item)} />}
+
+      {live &&
+        session &&
+        ARROW_ROLES.filter((role) => role !== 'media' || showLibrary).map((role) => (
+          <ClaudeCursor
+            key={role}
+            role={role}
+            comp={session.comp}
+            canvas={canvasRef}
+            at={arrows[role].target}
+            note={arrows[role].note}
+            active={now - arrows[role].at < 6000}
+          />
+        ))}
+
       {exporting !== null && (
         <div className="overlay">
           <div className="overlay-card">
@@ -571,6 +735,105 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
 }
 
 /** The platform's covered areas, shaded over the preview, with the safe area outlined. */
+/** Scrolls the JSON panel to the first line Claude changed, and selects it so it stands out. */
+function revealChange(el: HTMLTextAreaElement | null, before: string, after: string) {
+  if (!el || before === after) return
+  let i = 0
+  while (i < before.length && i < after.length && before[i] === after[i]) i++
+  const line = after.slice(0, i).split('\n').length - 1
+  const lineStart = after.lastIndexOf('\n', i - 1) + 1
+  const lineEnd = after.indexOf('\n', i)
+  requestAnimationFrame(() => {
+    const lh = parseFloat(getComputedStyle(el).lineHeight) || 18
+    el.scrollTop = Math.max(0, line * lh - el.clientHeight / 3)
+    el.setSelectionRange(lineStart, lineEnd === -1 ? after.length : lineEnd)
+  })
+}
+
+const ARROW_STYLE: Record<ArrowRole, { name: string; stops: [string, string, string] }> = {
+  video: { name: 'Video', stops: ['#ffd166', '#ff4d6d', '#7c5cff'] },
+  timeline: { name: 'Timeline', stops: ['#7df9ff', '#2fb8ff', '#3b5bff'] },
+  media: { name: 'Caricamenti', stops: ['#d9ff7a', '#5fd36b', '#13a882'] },
+}
+
+/** Where a target is on screen right now, or null when it is not shown. */
+function locate(target: ClaudeTarget, comp: Composition, canvas: HTMLCanvasElement | null): { left: number; top: number } | null {
+  if ('clip' in target || 'media' in target) {
+    const key = 'clip' in target ? target.clip : `media:${target.media}`
+    const el = document.querySelector(`[data-claude="${CSS.escape(key)}"]`)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    const edge = 'clip' in target ? target.edge : undefined
+    const left = edge === 'start' ? r.left : edge === 'end' ? r.right : r.left + Math.min(r.width / 2, 60)
+    return { left: left - 3, top: r.top + Math.min(r.height / 2, 60) - 2 }
+  }
+  if (!canvas) return null
+  const r = canvas.getBoundingClientRect()
+  return { left: r.left + (target.x / comp.width) * r.width, top: r.top + (target.y / comp.height) * r.height }
+}
+
+/** Where an arrow waits when it has nothing to do: at the edge of its own area, always visible. */
+function parking(role: ArrowRole, canvas: HTMLCanvasElement | null): { left: number; top: number } | null {
+  const el = role === 'video' ? canvas : document.querySelector(role === 'timeline' ? '.tl-toolbar' : '.mp-head')
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  if (role === 'video') return { left: r.right - 30, top: r.top + 24 }
+  if (role === 'timeline') return { left: r.left + 230, top: r.top + 10 }
+  return { left: r.left + 130, top: r.top + 12 }
+}
+
+/**
+ * One of Claude's arrows: it glides to what Claude is working on in its area (the frame, the
+ * timeline, or the uploads), says what it is doing, and waits at the edge of its area otherwise.
+ */
+function ClaudeCursor({ role, comp, canvas, at, note, active }: { role: ArrowRole; comp: Composition; canvas: RefObject<HTMLCanvasElement | null>; at: ClaudeTarget | null; note?: string; active: boolean }) {
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null)
+  // A clip or file it points at is brought into view once (as soon as it exists on the page),
+  // then followed as the layout moves.
+  const scrolledFor = useRef<ClaudeTarget | null>(null)
+  useEffect(() => {
+    let raf = 0
+    const tick = () => {
+      if (at && at !== scrolledFor.current && ('clip' in at || 'media' in at)) {
+        const key = 'clip' in at ? at.clip : `media:${at.media}`
+        const el = document.querySelector(`[data-claude="${CSS.escape(key)}"]`)
+        if (el) {
+          el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
+          scrolledFor.current = at
+        }
+      }
+      const p = (at && locate(at, comp, canvas.current)) ?? parking(role, canvas.current)
+      setPos((prev) => (prev && p && Math.abs(prev.left - p.left) < 0.5 && Math.abs(prev.top - p.top) < 0.5 ? prev : p))
+      raf = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(raf)
+  }, [at, comp, canvas, role])
+  if (!pos) return null
+  const style = ARROW_STYLE[role]
+  const gradient = `claude-cursor-${role}`
+  return (
+    <div
+      className={`claude-cursor role-${role}${active ? ' active' : ' idle'}${pos.left > window.innerWidth - 340 ? ' flip' : ''}${pos.top > window.innerHeight - 70 ? ' up' : ''}`}
+      style={pos}
+    >
+      <svg width="34" height="40" viewBox="0 0 34 40" aria-hidden>
+        <defs>
+          <linearGradient id={gradient} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stopColor={style.stops[0]} />
+            <stop offset="0.5" stopColor={style.stops[1]} />
+            <stop offset="1" stopColor={style.stops[2]} />
+          </linearGradient>
+        </defs>
+        <path d="M2 2 L30 20 L17 22 L11 37 Z" fill={`url(#${gradient})`} stroke="#fff" strokeWidth="2" strokeLinejoin="round" />
+      </svg>
+      <span className="claude-cursor-label" style={{ background: `linear-gradient(90deg, ${style.stops[1]}, ${style.stops[2]})` }}>
+        {style.name}
+        {active && note ? ` · ${note}` : ''}
+      </span>
+    </div>
+  )
+}
 function SafeZone({ comp, box }: { comp: Composition; box: { left: number; top: number; width: number; height: number } }) {
   const p = platformFor(comp)
   const [l, t, r, b] = p.safe

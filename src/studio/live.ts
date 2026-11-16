@@ -8,6 +8,45 @@ export interface LiveUpdate {
   note?: string
   /** Comp time to show, so the viewer sees the part being changed. */
   time?: number
+  /** Where Claude's arrow points (routed to the arrow of that area, see `arrowFor`). */
+  cursor?: ClaudeTarget
+  /** Several arrows at once, each with its own note: `{ video, timeline, media }`. */
+  arrows?: Partial<Record<ArrowRole, { target: ClaudeTarget; note?: string }>>
+}
+
+/**
+ * `{ x, y }`: a spot on the frame, in composition pixels.
+ * `{ clip, edge? }`: a timeline clip, by scene id ("foto") or layer id/label ("POLLO"), optionally its
+ * "start" or "end" edge (where a trim happens).
+ * `{ media }`: a file in the Caricamenti panel, by name ("ulivi-vaso-5s-720p.mp4").
+ */
+export type ClaudeTarget = { x: number; y: number } | { clip: string; edge?: 'start' | 'end' } | { media: string }
+
+/** Claude has one arrow per area: the frame, the timeline (cuts, clips, audio) and the uploads. */
+export type ArrowRole = 'video' | 'timeline' | 'media'
+export const ARROW_ROLES: ArrowRole[] = ['video', 'timeline', 'media']
+
+export function arrowFor(t: ClaudeTarget): ArrowRole {
+  return 'clip' in t ? 'timeline' : 'media' in t ? 'media' : 'video'
+}
+
+function readCursor(v: unknown): ClaudeTarget | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const c = v as Record<string, unknown>
+  if (typeof c.clip === 'string') return { clip: c.clip, edge: c.edge === 'start' || c.edge === 'end' ? c.edge : undefined }
+  if (typeof c.media === 'string') return { media: c.media }
+  return typeof c.x === 'number' && typeof c.y === 'number' ? { x: c.x, y: c.y } : undefined
+}
+
+function readArrows(v: unknown): LiveUpdate['arrows'] {
+  if (!v || typeof v !== 'object') return undefined
+  const out: NonNullable<LiveUpdate['arrows']> = {}
+  for (const role of ARROW_ROLES) {
+    const a = (v as Record<string, unknown>)[role] as Record<string, unknown> | undefined
+    const target = readCursor(a?.target ?? a)
+    if (target) out[role] = { target, note: typeof a?.note === 'string' ? a.note : undefined }
+  }
+  return out
 }
 
 interface DocSnapshot {
@@ -26,7 +65,7 @@ export const LIVE_DOC = 'live/current'
 /** Subscribes to Claude's live composition. Resolves to an unsubscribe, or null outside an Artifact. */
 export async function connectLive(onUpdate: (u: LiveUpdate) => void): Promise<(() => void) | null> {
   const claude = (window as unknown as { claude?: ClaudeRuntime }).claude
-  if (!claude?.use) return null
+  if (!claude?.use) return connectLocalLive(onUpdate)
   const db = (await claude.use('db')) as LiveDb | null
   if (!db) return null
   return db.doc(LIVE_DOC).onSnapshot((snap) => {
@@ -36,8 +75,40 @@ export async function connectLive(onUpdate: (u: LiveUpdate) => void): Promise<((
       json: d.json,
       note: typeof d.note === 'string' ? d.note : undefined,
       time: typeof d.time === 'number' ? d.time : undefined,
+      cursor: readCursor(d.cursor),
+      arrows: readArrows(d.arrows),
     })
   })
+}
+
+/**
+ * `npm run dev` on your own computer (`#live`): Claude writes `live/current.json` in the repo and the
+ * dev server pushes every save to the page. Same shape as the shared doc: `{ json, note?, time? }`,
+ * where `json` may also be the composition object itself.
+ */
+async function connectLocalLive(onUpdate: (u: LiveUpdate) => void): Promise<(() => void) | null> {
+  const hot = import.meta.hot
+  if (!hot) return null
+  const apply = (raw: unknown) => {
+    if (!raw || typeof raw !== 'object') return
+    const d = raw as Record<string, unknown>
+    const json = typeof d.json === 'string' ? d.json : d.json && typeof d.json === 'object' ? JSON.stringify(d.json, null, 2) : null
+    if (json === null) return
+    onUpdate({
+      json,
+      note: typeof d.note === 'string' ? d.note : undefined,
+      time: typeof d.time === 'number' ? d.time : undefined,
+      cursor: readCursor(d.cursor),
+      arrows: readArrows(d.arrows),
+    })
+  }
+  const listener = (data: unknown) => apply(data)
+  hot.on('live:update', listener)
+  await fetch('/__live')
+    .then((r) => (r.ok ? r.json() : null))
+    .then(apply)
+    .catch(() => {})
+  return () => hot.off('live:update', listener)
 }
 
 // ---- Working together on the page: files and messages from the viewer to Claude ----

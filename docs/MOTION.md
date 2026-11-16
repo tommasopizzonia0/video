@@ -368,7 +368,9 @@ or fix mixed light (a face lit by a window and a lamp) — that is done on set.
   scene durations change: `{ "sfx": "whoosh", "scene": "demo", "start": 0 }` hits on that cut.
 - `role`: `music` (default for assets), `voice` or `sfx`. Music ducks under voice clips automatically.
 - `sfx` plays a built-in sound effect instead of an asset, synthesized in code (no files, no licenses):
-  `whoosh` and `riser` (stretch them with `duration`), `impact`, `click`, `pop`, `tick`, `sparkle`.
+  `whoosh` and `riser` (stretch them with `duration`), `impact`, `click`, `pop`, `tick`, `sparkle`, and the ad kit:
+  `boom` (sub drop), `hit` (cinematic hit), `swoosh` (fast pass-by), `reverse` (reverse cymbal into the hit) and
+  `beat`, a 124 BPM music bed with kick, claps, hats, bass and pads (set `duration`, and `role: "music"`).
   `start` is when the sound *hits*: the middle of the whoosh, the end of the riser, the attack of the
   rest. So put it exactly on the cut or the beat; the effect starts early on its own.
 

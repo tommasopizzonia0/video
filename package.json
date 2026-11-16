@@ -15,6 +15,7 @@
     "beats": "node scripts/beats.mjs",
     "prep": "node scripts/prep.mjs",
     "photos": "node scripts/photos.mjs",
+    "sounds": "node scripts/sounds.mjs",
     "cutout": "node scripts/cutout.mjs"
   },
   "dependencies": {

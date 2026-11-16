@@ -503,7 +503,7 @@ export interface FontSource {
   style?: 'normal' | 'italic'
 }
 
-export type SfxName = 'whoosh' | 'impact' | 'riser' | 'click' | 'pop' | 'tick' | 'sparkle'
+export type SfxName = 'whoosh' | 'impact' | 'riser' | 'click' | 'pop' | 'tick' | 'sparkle' | 'boom' | 'hit' | 'swoosh' | 'reverse' | 'beat'
 
 export interface AudioClip {
   /** An audio or video asset. Use either `asset` or `sfx`. */

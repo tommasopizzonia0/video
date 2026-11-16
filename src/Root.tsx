@@ -26,10 +26,12 @@ function Views() {
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  if (hash !== '#motion') return <App />
+  // #live (dev server only): the studio follows live/current.json as Claude edits it.
+  const local = import.meta.env.DEV && hash === '#live'
+  if (hash !== '#motion' && !local) return <App />
   return (
     <Suspense fallback={null}>
-      <MotionStudio />
+      <MotionStudio key={hash} live={local} />
     </Suspense>
   )
 }

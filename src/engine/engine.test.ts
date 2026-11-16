@@ -224,7 +224,7 @@ describe('sound effects and loudness', () => {
       const a = synthSfx(name, 48000)
       const b = synthSfx(name, 48000)
       expect(a.samples).toEqual(b.samples)
-      const max = Math.max(...a.samples.map(Math.abs))
+      const max = a.samples.reduce((m, v) => Math.max(m, Math.abs(v)), 0)
       expect(max).toBeGreaterThan(0.2)
       expect(max).toBeLessThanOrEqual(0.61)
       expect(a.peak).toBeGreaterThanOrEqual(0)
