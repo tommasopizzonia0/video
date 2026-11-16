@@ -341,10 +341,12 @@ export class MixGraph {
     this.feedback.gain.value = Math.max(0, Math.min(0.9, settings.fx.feedback ?? 0.35))
   }
 
+  private meterBuf = new Float32Array(1024)
+
   /** Peak levels (linear, 0..1+) per strip since the last call: "a0", "bus:music", "master". */
   levels(): Record<string, [number, number]> {
     const out: Record<string, [number, number]> = {}
-    const buf = new Float32Array(1024)
+    const buf = this.meterBuf
     const peak = (a: AnalyserNode) => {
       a.getFloatTimeDomainData(buf)
       let p = 0

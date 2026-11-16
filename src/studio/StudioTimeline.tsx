@@ -2,13 +2,14 @@
 // track with thumbnails, overlay tracks for text, shapes and media, and the audio below.
 // Clicking or dragging seeks; clicking a clip jumps to it and selects it.
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Renderer, videoRequests } from '../engine/render'
 import type { BrowserResources } from '../engine/resources'
 import { compDuration, layerWindow, sceneStarts, transitionDuration } from '../engine/timeline'
 import type { Composition, Layer } from '../engine/types'
 import { formatTime } from '../timeline'
 import { MEDIA_DRAG, type MediaItem } from './library'
+import type { Clock } from './clock'
 
 type Kind = 'text' | 'shape' | 'media' | 'audio'
 
@@ -172,10 +173,10 @@ function rulerLabel(t: number): string {
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}${frac}`
 }
 
-export function StudioTimeline({
+export const StudioTimeline = memo(function StudioTimeline({
   comp,
   res,
-  time,
+  clock,
   duration,
   fps,
   playing,
@@ -188,7 +189,8 @@ export function StudioTimeline({
 }: {
   comp: Composition | null
   res: BrowserResources | null
-  time: number
+  /** The playhead time; it moves every frame while playing, without re-rendering the timeline. */
+  clock: Clock
   duration: number
   fps: number
   playing: boolean
@@ -224,13 +226,25 @@ export function StudioTimeline({
   const contentWidth = total * pps
   const x = (t: number) => t * pps
 
-  // Keep the playhead in view while playing.
+  // The playhead and the timecode follow the clock straight in the page, and the view scrolls to
+  // keep the playhead visible while playing.
+  const playhead = useRef<HTMLDivElement>(null)
+  const timecode = useRef<HTMLElement>(null)
   useEffect(() => {
-    const el = scroller.current
-    if (!el || !playing) return
-    const px = HEADER + x(time)
-    if (px > el.scrollLeft + el.clientWidth - 40 || px < el.scrollLeft + HEADER) el.scrollLeft = px - HEADER - 40
-  })
+    let shown = ''
+    return clock.watch((time) => {
+      const left = HEADER + Math.min(time, total) * pps
+      // Read the scroll position before writing anything, so the read never forces a layout.
+      const el = scroller.current
+      if (el && playing) {
+        const scroll = el.scrollLeft
+        if (left > scroll + width - 40 || left < scroll + HEADER) el.scrollLeft = left - HEADER - 40
+      }
+      if (playhead.current) playhead.current.style.transform = `translateX(${left}px)`
+      const tc = formatTime(time)
+      if (timecode.current && tc !== shown) timecode.current.textContent = shown = tc
+    })
+  }, [clock, total, pps, playing, width])
 
   // Labelled ticks every `step` seconds (with a minor tick halfway), at least ~70px apart.
   const step = [0.5, 1, 2, 5, 10, 30, 60].find((s) => s * pps >= 70) ?? 60
@@ -259,15 +273,15 @@ export function StudioTimeline({
         {leading}
         <div className="tl-tools">
           <button title="Vai all'inizio" onClick={() => onSeek(0)}>⏮</button>
-          <button title="Fotogramma precedente (←)" onClick={() => onSeek(Math.max(0, time - frame))}>‹</button>
+          <button title="Fotogramma precedente (←)" onClick={() => onSeek(Math.max(0, clock.get() - frame))}>‹</button>
           <button className="tl-play" title="Play/Pausa (spazio)" onClick={onTogglePlay} disabled={!comp}>
             {playing ? '❚❚' : '▶'}
           </button>
-          <button title="Fotogramma successivo (→)" onClick={() => onSeek(Math.min(total, time + frame))}>›</button>
+          <button title="Fotogramma successivo (→)" onClick={() => onSeek(Math.min(total, clock.get() + frame))}>›</button>
           <button title="Vai alla fine" onClick={() => onSeek(total)}>⏭</button>
         </div>
         <div className="tl-timecode">
-          <strong>{formatTime(time)}</strong> <span>/ {formatTime(duration)}</span>
+          <strong ref={timecode} /> <span>/ {formatTime(duration)}</span>
         </div>
         <div className="tl-zoom">
           <button title="Riduci" onClick={() => setZoom((z) => Math.max(1, z / 1.5))}>−</button>
@@ -373,11 +387,11 @@ export function StudioTimeline({
             </div>
           )}
 
-          <div className="tl-playhead" style={{ left: HEADER + x(Math.min(time, total)) }}>
+          <div className="tl-playhead" ref={playhead} style={{ left: 0 }}>
             <i />
           </div>
         </div>
       </div>
     </section>
   )
-}
+})

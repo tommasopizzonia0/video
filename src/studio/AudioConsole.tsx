@@ -339,7 +339,7 @@ const Strip = memo(function Strip({ id, short, label, color, s, selected, off, m
 
 // ---------- the console ----------
 
-export function AudioConsole({
+export const AudioConsole = memo(function AudioConsole({
   comp,
   mixer,
   onDraft,
@@ -385,10 +385,10 @@ export function AudioConsole({
   )
 
   // Meters: one animation loop for every strip, writing straight into the DOM.
-  const meters = useRef(new Map<string, { el: HTMLElement; hold: [number, number]; at: [number, number]; shown: [number, number] }>())
+  const meters = useRef(new Map<string, { el: HTMLElement; hold: [number, number]; at: [number, number]; shown: [number, number]; drawn: [string, string] }>())
   const register = useMemo(
     () => (id: string, el: HTMLElement | null) => {
-      if (el) meters.current.set(id, { el, hold: [0, 0], at: [0, 0], shown: [0, 0] })
+      if (el) meters.current.set(id, { el, hold: [0, 0], at: [0, 0], shown: [0, 0], drawn: ['', ''] })
       else meters.current.delete(id)
     },
     [],
@@ -415,6 +415,10 @@ export function AudioConsole({
             m.hold[ch] = m.shown[ch]
             m.at[ch] = now
           }
+          // Touch the page only when the meter moved (at rest, stopped, nothing is written at all).
+          const key = `${m.shown[ch].toFixed(3)}|${m.hold[ch].toFixed(3)}`
+          if (key === m.drawn[ch]) continue
+          m.drawn[ch] = key
           const bar = bars[ch] as HTMLElement
           ;(bar.children[0] as HTMLElement).style.clipPath = `inset(${(1 - m.shown[ch]) * 100}% 0 0 0)`
           const peak = bar.children[1] as HTMLElement
@@ -500,7 +504,7 @@ export function AudioConsole({
       </div>
     </section>
   )
-}
+})
 
 // ---------- the detail panel ----------
 
