@@ -414,6 +414,29 @@ What it sets is saved in the JSON, so the CLI and the export sound like the prev
 - On the live page Claude's fourth arrow, **Audio**, points at a strip with
   `{ "channel": "a0" }` (or `"v0"`, `"bus:music"`, `"master"`).
 
+## The arrows as a team (Regia)
+
+The **Regia** button in the studio turns the four arrows into a team of agents, each looking after
+its own area (`src/agents/`):
+
+- **Video** draws sample frames and checks every text: safe zone, contrast, reading time.
+- **Timeline** checks cuts, scene lengths, fast transitions and cuts on the beat.
+- **Caricamenti** checks the files: missing, unused, too small, clips shorter than their scene.
+- **Audio** checks the music's ending and fade, ducking under a voice, the master limiter.
+
+An arrow only changes its own part of the JSON (`ownerOf` in `team.ts`); anything else it asks for
+on the shared channel: Video asks Timeline to lengthen a scene, Timeline does it and tells Audio the
+video now ends later, Audio moves the music's ending. The director (`runTeam`) runs each chain on a
+draft, turns it into one proposal, drops duplicates and holds back proposals that touch what an
+earlier one changes. Nothing is applied until **Applica** (Ctrl+Z undoes it). The rules are plain
+arithmetic: the same composition always gets the same advice. Add a skill by extending an agent's
+`observe` (what it notices) or `receive` (how it answers a topic) in `agents.ts`.
+
+On the local live page (`#live`) the arrows can also **reason with Claude** instead of the rules: the
+studio writes what they see to `live/team/` (facts and one frame per scene), a Claude session runs one
+agent per arrow (`.claude/skills/regia`) and writes their conversation as `team` in `live/current.json`.
+The studio checks it with the same director (`fromClaude`) and shows it under **Ragiona Claude**.
+
 ## Cutting on the music
 
 `npm run beats -- music.mp3` writes `music.beats.json` next to the file and prints the tempo, how

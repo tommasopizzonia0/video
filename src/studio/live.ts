@@ -12,6 +12,18 @@ export interface LiveUpdate {
   cursor?: ClaudeTarget
   /** Several arrows at once, each with its own note: `{ video, timeline, media, audio }`. */
   arrows?: Partial<Record<ArrowRole, { target: ClaudeTarget; note?: string }>>
+  /**
+   * Claude reasoning as the four arrows (see .claude/skills/regia): one round of their conversation.
+   * `round` changes with every new round; `messages` as in `WireMessage` (src/agents/team.ts).
+   */
+  team?: { round: string; messages: unknown[] }
+}
+
+function readTeam(v: unknown): LiveUpdate['team'] {
+  if (!v || typeof v !== 'object') return undefined
+  const t = v as Record<string, unknown>
+  if (!Array.isArray(t.messages)) return undefined
+  return { round: String(t.round ?? ''), messages: t.messages }
 }
 
 /**
@@ -80,6 +92,7 @@ export async function connectLive(onUpdate: (u: LiveUpdate) => void): Promise<((
       time: typeof d.time === 'number' ? d.time : undefined,
       cursor: readCursor(d.cursor),
       arrows: readArrows(d.arrows),
+      team: readTeam(d.team),
     })
   })
 }
@@ -103,6 +116,7 @@ async function connectLocalLive(onUpdate: (u: LiveUpdate) => void): Promise<(() 
       time: typeof d.time === 'number' ? d.time : undefined,
       cursor: readCursor(d.cursor),
       arrows: readArrows(d.arrows),
+      team: readTeam(d.team),
     })
   }
   const listener = (data: unknown) => apply(data)
