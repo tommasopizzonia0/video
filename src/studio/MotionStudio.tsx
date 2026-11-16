@@ -508,7 +508,8 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const decoded = useRef<{ session: object; buffers: Promise<Map<string, AudioBuffer>> } | null>(null)
   const play = useCallback(async () => {
     if (!session || playback.current) return
-    const from = timeRef.current >= duration - 0.05 ? 0 : timeRef.current
+    const now = clock.get()
+    const from = now >= duration - 0.05 ? 0 : now
     const state: { raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph } = { raf: 0, audio: null, sources: [] }
     playback.current = state
     setPlaying(true)
@@ -543,7 +544,21 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     state.raf = requestAnimationFrame(tick)
   }, [session, duration, draw, stop, clock])
 
-  useEffect(() => stop, [stop, session])
+  // When the composition changes while playing (Claude editing live, a clip dropped on the timeline),
+  // playback stops for the reload and picks up again from the same moment on the new version.
+  const resume = useRef(false)
+  useEffect(
+    () => () => {
+      if (playback.current) resume.current = true
+      stop()
+    },
+    [stop, session],
+  )
+  useEffect(() => {
+    if (!resume.current || !session || !renderer) return
+    resume.current = false
+    void play()
+  }, [session, renderer, play])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
