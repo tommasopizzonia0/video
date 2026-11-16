@@ -11,7 +11,7 @@ import { BrowserResources } from '../engine/resources'
 import type { Composition, Layer } from '../engine/types'
 import { sceneStarts } from '../engine/timeline'
 import { MediaPanel } from './MediaPanel'
-import { hasLibrary, mediaDuration, saveLive, type MediaItem } from './library'
+import { hasLibrary, mediaDuration, saveLive, saveTeamContext, type MediaItem } from './library'
 import { parseComposition, type Issue } from '../engine/validate'
 import { applyVariant } from '../engine/variants'
 import { expandStudioWith } from '../engine/studio'
@@ -21,7 +21,7 @@ import { StudioTimeline } from './StudioTimeline'
 import { TeamPanel } from './TeamPanel'
 import { TEAM } from '../agents/agents'
 import { look } from '../agents/look'
-import { applyOps, ROLE_NAME, runTeam, type MediaFacts, type Message, type Plan, type TeamResult } from '../agents/team'
+import { applyOps, fromClaude, ROLE_NAME, runTeam, type MediaFacts, type Message, type Plan, type TeamResult, type WireMessage } from '../agents/team'
 
 const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })
 const exampleAssets = import.meta.glob<string>('../../examples/assets/*', { eager: true, query: '?url', import: 'default' })
@@ -69,6 +69,8 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     return () => clearInterval(id)
   }, [live])
   const [activity, setActivity] = useState<{ id: number; note: string }[]>([])
+  // The last round of the arrows' conversation written by Claude in the live document.
+  const [liveTeam, setLiveTeam] = useState<{ round: string; messages: WireMessage[]; json: string } | null>(null)
   const codeRef = useRef<HTMLTextAreaElement>(null)
   // While watching Claude live, the JSON stays out of the way until asked for.
   const [showCode, setShowCode] = useState(!live)
@@ -278,6 +280,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
           return next
         })
       }
+      if (u.team?.messages.length) setLiveTeam({ round: u.team.round, messages: u.team.messages as WireMessage[], json: u.json })
       if (u.note) {
         const note = u.note
         setActivity((a) => (a[0]?.note === note ? a : [{ id: Date.now(), note }, ...a].slice(0, 6)))
@@ -449,7 +452,17 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     }
   })
   const [teamAuto, setTeamAuto] = useState(true)
-  const [team, setTeam] = useState<TeamResult | null>(null)
+  const [rulesTeam, setRulesTeam] = useState<TeamResult | null>(null)
+  // Claude reasoning as the arrows (live page), shown instead of the built-in rules while it has something to say.
+  const [claudeTeam, setClaudeTeam] = useState<TeamResult | null>(null)
+  const [teamView, setTeamView] = useState<'claude' | 'regole'>('regole')
+  const team = teamView === 'claude' && claudeTeam ? claudeTeam : rulesTeam
+  const showingClaude = useRef(false)
+  useEffect(() => {
+    showingClaude.current = teamView === 'claude' && !!claudeTeam
+  }, [teamView, claudeTeam])
+  const setTeam = teamView === 'claude' && claudeTeam ? setClaudeTeam : setRulesTeam
+  const [teamAsked, setTeamAsked] = useState<string | null>(null)
   const [teamRunning, setTeamRunning] = useState(false)
   const [speaking, setSpeaking] = useState<number | null>(null)
   const dismissed = useRef(new Set<string>())
@@ -528,16 +541,46 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       const beats = raw.beats ? (session.res.beats(raw.beats.asset) ?? []).map((b) => b + (raw.beats!.offset ?? 0)) : undefined
       const result = runTeam(TEAM, { comp: raw, platform, look: seen, media, beats, missing })
       result.plans = result.plans.filter((p) => !dismissed.current.has(JSON.stringify(p.ops)))
-      setTeam(result)
+      setRulesTeam(result)
+      // On the local live page, Claude gets what the arrows saw: a frame per scene and the facts.
+      if (live && hasLibrary) {
+        const scenes = raw.scenes ?? []
+        const starts = sceneStarts(scenes)
+        const frames: { name: string; blob: Blob }[] = []
+        const shots = scenes.map((sc, i) => ({ i, id: sc.id ?? `scena-${i + 1}`, t: Math.min(duration - 0.05, starts[i] + sc.duration * 0.6) }))
+        for (const shot of shots) {
+          await session.res.prepare(videoRequests(session.comp, shot.t))
+          session.renderer.draw(shot.t)
+          const blob = await new Promise<Blob | null>((ok) => canvasRef.current!.toBlob(ok, 'image/png'))
+          if (blob) frames.push({ name: `${String(shot.i + 1).padStart(2, '0')}-${shot.id.replace(/[^\w-]+/g, '_')}-${shot.t.toFixed(1)}s.png`, blob })
+        }
+        void draw(timeRef.current)
+        await saveTeamContext(
+          {
+            savedAt: new Date().toISOString(),
+            how: 'Quello che vedono le freccette. Procedura: .claude/skills/regia/SKILL.md',
+            duration,
+            platform: { id: platform.id, name: platform.name, safe: platform.safe, blocked: platform.blocked ?? [] },
+            scenes: shots.map((x, k) => ({ index: x.i, id: x.id, start: Math.round(starts[x.i] * 100) / 100, duration: scenes[x.i].duration, frame: frames[k]?.name, frameTime: Math.round(x.t * 100) / 100 })),
+            look: seen,
+            media,
+            beats: beats?.length ?? 0,
+            missing,
+            rules: { plans: result.plans.map((p) => ({ by: p.by, messages: p.messages.map((m) => `${m.from} → ${m.to}: ${m.text}`), ops: p.ops })), notes: result.notes.map((m) => `${m.from}: ${m.text}`) },
+          },
+          frames,
+        ).catch(() => false)
+      }
       const key = result.channel.map((m) => m.text).join('\n')
-      if (key !== lastChannel.current) {
+      // While Claude's round is on screen, the rules work quietly in the background.
+      if (key !== lastChannel.current && !showingClaude.current) {
         lastChannel.current = key
         playChannel(result.channel)
       }
     } finally {
       setTeamRunning(false)
     }
-  }, [parsed.comp, session, teamRunning, stop, resolve, variant, draw, missing, playChannel])
+  }, [parsed.comp, session, teamRunning, stop, resolve, variant, draw, missing, playChannel, live, duration])
 
   // Always on: a fresh look a moment after every change to the composition.
   const analyzeRef = useRef(analyze)
@@ -550,6 +593,36 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     return () => clearTimeout(id)
   }, [teamOpen, teamAuto, session])
   useEffect(() => () => replay.current.forEach(clearTimeout), [])
+
+  // A new round from Claude: checked with the same rules as the built-in team, then played on the arrows.
+  const lastRound = useRef('')
+  useEffect(() => {
+    if (!liveTeam || liveTeam.round === lastRound.current) return
+    lastRound.current = liveTeam.round
+    let comp: Composition
+    try {
+      comp = JSON.parse(liveTeam.json) as Composition
+    } catch {
+      return
+    }
+    const result = fromClaude(liveTeam.messages, comp)
+    showingClaude.current = true
+    setClaudeTeam(result)
+    setTeamView('claude')
+    setTeamOpen(true)
+    setTeamAsked(null)
+    lastChannel.current = result.channel.map((m) => m.text).join('\n')
+    playChannel(result.channel)
+  }, [liveTeam, playChannel])
+
+  /** Asks Claude to reason as the team: on claude.ai through a comment, locally in the chat. */
+  const askClaude = async () => {
+    await analyze()
+    if (import.meta.env.MODE === 'artifact' && stageRef.current) {
+      const ok = await sendToClaude(stageRef.current, 'Regia: ragionate come squadra sulle freccette (procedura regia).').catch(() => false)
+      setTeamAsked(ok ? 'Inviato: Claude risponde qui con le freccette.' : 'Non riesco a inviarlo da qui: scrivi «regia» a Claude.')
+    } else setTeamAsked('Pronto: scrivi «regia» a Claude in chat. Le freccette parleranno qui.')
+  }
 
   const applyPlans = (plans: Plan[]) => {
     let comp: Composition
@@ -965,10 +1038,15 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       {teamOpen && (
         <TeamPanel
           result={team}
+          view={claudeTeam ? teamView : null}
+          onView={setTeamView}
+          onAskClaude={live ? () => void askClaude() : undefined}
+          asked={teamAsked}
           running={teamRunning}
           auto={teamAuto}
           speaking={speaking}
           onRun={() => {
+            setTeamView('regole')
             lastChannel.current = ''
             void analyze()
           }}

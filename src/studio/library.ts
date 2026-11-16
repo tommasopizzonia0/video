@@ -45,6 +45,18 @@ export async function uploadToLibrary(files: File[]): Promise<void> {
   }
 }
 
+/**
+ * Hands Claude what the arrows see (local live page): `live/team/context.json` and the sampled
+ * frames as `live/team/frames/<name>.png`. The old frames are replaced.
+ */
+export async function saveTeamContext(context: unknown, frames: { name: string; blob: Blob }[]): Promise<boolean> {
+  if (!hasLibrary) return false
+  const r = await fetch('/__team', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ context, frames: frames.map((f) => f.name) }) })
+  if (!r.ok) return false
+  for (const f of frames) await fetch(`/__team/frame?name=${encodeURIComponent(f.name)}`, { method: 'POST', body: f.blob })
+  return true
+}
+
 /** Saves the composition the viewer changed back to live/current.json, so Claude works on the same one. */
 export async function saveLive(data: { json: unknown; note?: string; time?: number; cursor?: unknown }): Promise<void> {
   if (!hasLibrary) return

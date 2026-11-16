@@ -35,6 +35,10 @@ function Line({ m, live }: { m: Message; live: boolean }) {
 
 export function TeamPanel({
   result,
+  view,
+  onView,
+  onAskClaude,
+  asked,
   running,
   auto,
   speaking,
@@ -47,6 +51,12 @@ export function TeamPanel({
   onClose,
 }: {
   result: TeamResult | null
+  /** Which reasoning is shown, when Claude has sent a round (null: only the rules so far). */
+  view: 'claude' | 'regole' | null
+  onView: (v: 'claude' | 'regole') => void
+  /** Live page only: asks Claude to reason as the four arrows. */
+  onAskClaude?: () => void
+  asked: string | null
   running: boolean
   auto: boolean
   speaking: number | null
@@ -78,6 +88,16 @@ export function TeamPanel({
           </span>
         ))}
       </div>
+      {view && (
+        <div className="tp-tabs" role="tablist">
+          <button className={view === 'claude' ? 'on' : ''} onClick={() => onView('claude')}>
+            Ragiona Claude
+          </button>
+          <button className={view === 'regole' ? 'on' : ''} onClick={() => onView('regole')}>
+            Regole fisse
+          </button>
+        </div>
+      )}
       <div className="tp-actions">
         <button className="primary" onClick={onRun} disabled={running}>
           {running ? 'Stanno guardando…' : 'Analizza'}
@@ -86,8 +106,15 @@ export function TeamPanel({
           <input type="checkbox" checked={auto} onChange={(e) => onAuto(e.target.checked)} />
           Sempre attive
         </label>
+        {onAskClaude && (
+          <button onClick={onAskClaude} disabled={running} title="Claude ragiona come le quattro freccette: ognuna guarda la sua sezione e si confronta con le altre">
+            Fai ragionare Claude
+          </button>
+        )}
         {ready.length > 1 && <button onClick={onApplyAll}>Applica tutte ({ready.length})</button>}
       </div>
+      {asked && <p className="tp-asked">{asked}</p>}
+      {result?.source === 'claude' && view === 'claude' && <p className="tp-source">Queste proposte le ha ragionate Claude, una freccetta alla volta. La regia ha controllato che ognuna tocchi solo la sua sezione.</p>}
 
       <section className="tp-section">
         <h4>Proposte {result ? `(${result.plans.length})` : ''}</h4>

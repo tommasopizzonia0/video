@@ -2029,3 +2029,30 @@ button.mp-audio.playing {
   font-size: 12px;
   color: var(--muted);
 }
+.tp-tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--panel-2);
+  border-radius: 8px;
+  padding: 3px;
+}
+.tp-tabs button {
+  flex: 1;
+  border: 0;
+  background: none;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+.tp-tabs button.on {
+  background: var(--accent);
+  color: #fff;
+}
+.tp-asked,
+.tp-source {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tp-asked {
+  color: var(--accent-2);
+}

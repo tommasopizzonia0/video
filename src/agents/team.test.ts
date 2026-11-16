@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { PLATFORMS } from '../engine/check'
 import type { Composition } from '../engine/types'
 import { audioAgent, mediaAgent, TEAM, timelineAgent, videoAgent } from './agents'
-import { applyOps, ownerOf, runTeam, type Agent, type Look, type TeamContext } from './team'
+import { applyOps, fromClaude, ownerOf, runTeam, type Agent, type Look, type TeamContext } from './team'
 
 const base = (): Composition => ({
   width: 1080,
@@ -125,5 +125,28 @@ describe('applyOps on a comp without a mix', () => {
   it('creates the missing objects', () => {
     const out = applyOps({ width: 1, height: 1 } as Composition, [{ op: 'set', path: ['mix', 'master'], value: { limiter: true } }])
     expect(out.mix?.master?.limiter).toBe(true)
+  })
+})
+
+describe('fromClaude', () => {
+  it('turns a written conversation into checked proposals', () => {
+    const r = fromClaude(
+      [
+        { plan: 1, from: 'video', to: 'timeline', text: 'Timeline, il titolo passa troppo in fretta: allunghi l\'apertura di 1 s?', target: { x: 540, y: 900 } },
+        { plan: 1, from: 'timeline', to: 'regista', text: 'Allungo l\'apertura a 4 s.', ops: [{ op: 'set', path: ['scenes', 0, 'duration'], value: 4 }] },
+        { plan: 2, from: 'video', to: 'regista', text: 'Accorcio io la scena.', ops: [{ op: 'set', path: ['scenes', 1, 'duration'], value: 2 }] },
+        { plan: 3, from: 'audio', to: 'regista', text: 'Tolgo la musica.', ops: [{ op: 'set', path: ['audio', 7, 'volume'], value: 0 }] },
+        { from: 'media', to: 'regista', text: 'Le clip sono a 480p.' },
+      ],
+      base(),
+    )
+    expect(r.source).toBe('claude')
+    expect(r.plans).toHaveLength(1)
+    expect(r.plans[0].ops).toEqual([{ op: 'set', path: ['scenes', 0, 'duration'], value: 4 }])
+    expect(r.plans[0].by).toBe('video')
+    // Video touching a scene length is vetoed by the director; the broken path becomes a note.
+    expect(r.channel.some((m) => m.from === 'regista' && m.text.includes('Timeline'))).toBe(true)
+    expect(r.notes.some((m) => m.text.includes('480p'))).toBe(true)
+    expect(r.notes.some((m) => m.from === 'regista' && m.text.includes('scartata'))).toBe(true)
   })
 })

@@ -432,6 +432,11 @@ earlier one changes. Nothing is applied until **Applica** (Ctrl+Z undoes it). Th
 arithmetic: the same composition always gets the same advice. Add a skill by extending an agent's
 `observe` (what it notices) or `receive` (how it answers a topic) in `agents.ts`.
 
+On the local live page (`#live`) the arrows can also **reason with Claude** instead of the rules: the
+studio writes what they see to `live/team/` (facts and one frame per scene), a Claude session runs one
+agent per arrow (`.claude/skills/regia`) and writes their conversation as `team` in `live/current.json`.
+The studio checks it with the same director (`fromClaude`) and shows it under **Ragiona Claude**.
+
 ## Cutting on the music
 
 `npm run beats -- music.mp3` writes `music.beats.json` next to the file and prints the tempo, how

@@ -121,6 +121,8 @@ export interface TeamResult {
   plans: Plan[]
   /** Notes with no change attached (things Tomm should know). */
   notes: Message[]
+  /** "regole": the built-in rules. "claude": a Claude session reasoning for each arrow (live page). */
+  source: 'regole' | 'claude'
 }
 
 // ---- The JSON patches ----
@@ -142,7 +144,7 @@ export function applyOps<T>(comp: T, ops: Op[]): T {
     let parent: unknown = out
     for (const k of o.path.slice(0, -1)) {
       const p = parent as Record<string | number, unknown>
-      if (p[k] === undefined && o.op !== 'remove') p[k] = {}
+      if (p[k] === undefined && o.op !== 'remove' && typeof k === 'string' && !Array.isArray(p)) p[k] = {}
       parent = p[k]
       if (parent === null || typeof parent !== 'object') break
     }
@@ -279,6 +281,11 @@ export function runTeam(agents: Agent[], ctx: TeamContext, opts: DirectorOptions
     }
   }
 
+  return { channel, plans: arbitrate(plans), notes, source: 'regole' }
+}
+
+/** Drops plans that repeat an earlier one and holds back those that collide with an earlier one. */
+export function arbitrate(plans: Plan[]): Plan[] {
   // Same changes proposed twice (two arrows noticed the same thing): keep the first.
   const unique: Plan[] = []
   for (const p of plans) {
@@ -289,13 +296,81 @@ export function runTeam(agents: Agent[], ctx: TeamContext, opts: DirectorOptions
   // Plans that collide with an earlier one wait for it.
   unique.forEach((p, i) => {
     p.id = i + 1
+    p.status = 'ready'
+    p.waitingFor = undefined
     const before = unique.slice(0, i).find((q) => q.status === 'ready' && overlaps(q.ops, p.ops))
     if (before) {
       p.status = 'waiting'
       p.waitingFor = before.id
     }
   })
-  return { channel, plans: unique, notes }
+  return unique
+}
+
+// ---- Claude as the team (live page) ----
+
+/**
+ * A message as a Claude session writes it in the live document (`team.messages`): the same fields
+ * as `Message`, without the id, plus `plan` to group the messages of one chain.
+ */
+export interface WireMessage extends Partial<Omit<Message, 'id' | 'replyTo'>> {
+  plan?: number | string
+}
+
+const isRole = (v: unknown): v is Role => typeof v === 'string' && (ROLES as string[]).includes(v)
+
+/**
+ * Turns the conversation a Claude session wrote for the arrows into proposals, with the same rules
+ * as the built-in team: an arrow may only change its own area, every chain must apply cleanly to the
+ * current composition, colliding proposals wait. What breaks a rule becomes a note from the director.
+ */
+export function fromClaude(wire: WireMessage[], comp: Composition): TeamResult {
+  const channel: Message[] = []
+  const notes: Message[] = []
+  const chains = new Map<string, Message[]>()
+  let nextId = 1
+  for (const w of wire) {
+    if (!w || typeof w.text !== 'string') continue
+    const from = isRole(w.from) || w.from === 'regista' ? w.from : 'regista'
+    const to = isRole(w.to) || w.to === 'regista' ? w.to : 'regista'
+    const m: Message = { id: nextId++, from, to, text: w.text, target: w.target, at: typeof w.at === 'number' ? w.at : undefined, topic: w.topic, data: w.data }
+    let ops = Array.isArray(w.ops) ? w.ops.filter((o) => o && Array.isArray(o.path) && ['set', 'push', 'remove'].includes(o.op)) : []
+    if (ops.length && from !== 'regista') {
+      const foreign = ops.find((o) => ownerOf(o.path) !== from)
+      if (foreign) {
+        ops = []
+        channel.push(m)
+        const key = w.plan !== undefined ? String(w.plan) : `n${m.id}`
+        const veto: Message = { id: nextId++, from: 'regista', to: from, text: `${ROLE_NAME[from]}, "${foreign.path.join('.')}" è della ${ROLE_NAME[ownerOf(foreign.path)]}: proposta tolta.`, topic: 'fuori-area' }
+        channel.push(veto)
+        chains.set(key, [...(chains.get(key) ?? []), m, veto])
+        continue
+      }
+    }
+    if (ops.length) m.ops = ops
+    channel.push(m)
+    const key = w.plan !== undefined ? String(w.plan) : `n${m.id}`
+    chains.set(key, [...(chains.get(key) ?? []), m])
+  }
+  const plans: Plan[] = []
+  for (const messages of chains.values()) {
+    const ops = messages.flatMap((m) => m.ops ?? [])
+    if (!ops.length) {
+      notes.push(...messages)
+      continue
+    }
+    try {
+      applyOps(comp, ops)
+    } catch (e) {
+      const err: Message = { id: nextId++, from: 'regista', to: 'regista', text: `Proposta scartata, non si applica alla composizione attuale: ${e instanceof Error ? e.message : String(e)}` }
+      channel.push(err)
+      notes.push(...messages.map((m) => ({ ...m, ops: undefined })), err)
+      continue
+    }
+    const by = messages.find((m) => m.from !== 'regista')?.from
+    plans.push({ id: 0, by: by && by !== 'regista' ? by : 'video', title: messages[0].text, messages, ops, status: 'ready' })
+  }
+  return { channel, plans: arbitrate(plans), notes, source: 'claude' }
 }
 
 function safeCall(fn: () => Outgoing[]): Outgoing[] {

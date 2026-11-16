@@ -114,7 +114,7 @@ export async function look(comp: Composition, renderer: Renderer, res: BrowserRe
 
   const texts: SeenText[] = [...seen.values()].map(({ sizes, ...e }) => {
     const sorted = [...sizes].sort((a, b) => a - b)
-    return { ...e, visible: Math.round(e.visible * 100) / 100, size: sorted[sorted.length >> 1] ?? 0 }
+    return { ...e, visible: Math.round(e.visible * 100) / 100, first: Math.round(e.first * 100) / 100, outside: Math.round(e.outside * 100) / 100, size: Math.round(sorted[sorted.length >> 1] ?? 0), box: e.box.map(Math.round) as SeenText['box'], contrast: e.contrast === null ? null : Math.round(e.contrast * 100) / 100 }
   })
   return { step, texts, empty }
 }

@@ -1,7 +1,7 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { viteSingleFile } from 'vite-plugin-singlefile'
-import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { basename, extname, join, relative, resolve, sep } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Plugin } from 'vite'
@@ -134,6 +134,37 @@ function localLive(): Plugin {
         }
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify(read()))
+      })
+
+      // What the arrows see, for a Claude session reasoning as the team (.claude/skills/regia).
+      const teamDir = resolve(root, 'live/team')
+      server.middlewares.use('/__team', (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405
+          res.end()
+          return
+        }
+        const url = new URL(req.url ?? '', 'http://x')
+        void readBody(req).then((body) => {
+          try {
+            if (url.pathname === '/frame') {
+              const name = basename(url.searchParams.get('name') ?? '').replace(/[^\w.-]+/g, '_')
+              if (!/\.png$/.test(name)) throw new Error('name')
+              mkdirSync(join(teamDir, 'frames'), { recursive: true })
+              writeFileSync(join(teamDir, 'frames', name), body)
+            } else {
+              const data = JSON.parse(body.toString('utf8'))
+              mkdirSync(join(teamDir, 'frames'), { recursive: true })
+              const keep = new Set<string>(data.frames ?? [])
+              for (const f of readdirSync(join(teamDir, 'frames'))) if (!keep.has(f)) rmSync(join(teamDir, 'frames', f))
+              writeFileSync(join(teamDir, 'context.json'), JSON.stringify(data.context, null, 2) + '\n')
+            }
+            res.statusCode = 204
+          } catch {
+            res.statusCode = 400
+          }
+          res.end()
+        })
       })
 
       server.middlewares.use('/__upload', (req, res) => {
