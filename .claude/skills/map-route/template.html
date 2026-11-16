@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="it"><head><meta charset="utf-8">
 <style>
 @font-face{font-family:'Inter';font-weight:500;src:url(fonts/inter-500-normal.woff2) format('woff2')}
 @font-face{font-family:'Inter';font-weight:600;src:url(fonts/inter-600-normal.woff2) format('woff2')}
@@ -42,7 +42,7 @@ const W = 1080, H = 1920, DUR = 4.0;
 const ACC = SPEC.accent;
 document.documentElement.style.setProperty('--accent', ACC);
 const KM = Number(SPEC.distance), MIN = Number(SPEC.minutes), UNIT = SPEC.unit;
-const fmtD = (x) => `${x.toFixed(1).replace(/\.0$/, '')} ${UNIT}`;
+const fmtD = (x) => `${x.toFixed(1).replace(/\.0$/, '').replace('.', ',')} ${UNIT}`;
 document.getElementById('cardn').textContent = SPEC.destination;
 document.getElementById('cardd').textContent = `${MIN} min · ${fmtD(KM)}`;
 SPEC.places.slice(0, 5).forEach((p, i) => { document.getElementById('l' + i).textContent = p || ''; });
@@ -288,8 +288,8 @@ function renderAt(t) {
     el.style.opacity = (inside ? 1 : 0) * smooth(.15, .5, t);
   });
   const left = KM * (1 - pr);
-  etan.textContent = pr >= 1 ? 'Arrived' : `${Math.max(1, Math.round(MIN * (1 - pr)))} min`;
-  etad.textContent = pr >= 1 ? `${fmtD(KM)} in ${MIN} min` : `${fmtD(Math.max(.1, left))} to go`;
+  etan.textContent = pr >= 1 ? 'Arrivato' : `${Math.max(1, Math.round(MIN * (1 - pr)))} min`;
+  etad.textContent = pr >= 1 ? `${fmtD(KM)} in ${MIN} min` : `mancano ${fmtD(Math.max(.1, left))}`;
   const [cx, cy] = project(END.x, 3.4, END.y);
   const ca = smooth(T_PIN + .45, T_PIN + .7, t);
   card.style.opacity = ca;

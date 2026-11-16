@@ -50,7 +50,7 @@ def check_setup(three):
 
 
 def load_spec(path, defaults):
-    spec = json.loads(Path(path).read_text())
+    spec = json.loads(Path(path).read_text(encoding='utf-8'))
     for k, v in defaults.items():
         spec.setdefault(k, v)
     unknown = sorted(set(spec) - set(defaults) - {'out', 'hold', 'template'})
@@ -64,9 +64,9 @@ def prepare(template, spec, dur, work, three=False):
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
-    html = Path(template).read_text()
+    html = Path(template).read_text(encoding='utf-8')
     data = json.dumps(spec, ensure_ascii=False).replace('</', '<\\/')
-    (work / 'index.html').write_text(html.replace('__SPEC__', data).replace('__DURATION__', f'{dur:.3f}'))
+    (work / 'index.html').write_text(html.replace('__SPEC__', data).replace('__DURATION__', f'{dur:.3f}'), encoding='utf-8')
     for f in (KIT / 'fonts').glob('*.woff2'):
         link(f, work / 'fonts' / f.name)
     link(KIT / 'vendor' / 'gsap.min.js', work / 'vendor' / 'gsap.min.js')
@@ -78,7 +78,7 @@ def prepare(template, spec, dur, work, three=False):
 
 
 def hyperframes(*args):
-    return subprocess.run(['npx', '--yes', HYPERFRAMES, *map(str, args)], capture_output=True, text=True)
+    return subprocess.run([shutil.which('npx') or 'npx', '--yes', HYPERFRAMES, *map(str, args)], capture_output=True, text=True)
 
 
 def render(work, out):
