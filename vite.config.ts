@@ -64,6 +64,7 @@ function localLive(): Plugin {
     foto: resolve(root, 'public/live'),
     caricati: resolve(root, 'live/uploads'),
     suoni: resolve(root, 'live/suoni'),
+    statera: resolve(root, '../statera'),
   }
   const read = () => {
     try {
