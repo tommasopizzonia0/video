@@ -108,9 +108,13 @@ class CanvasPool {
     ctx.filter = 'none'
     ctx.globalCompositeOperation = 'source-over'
     ctx.clearRect(0, 0, w, h)
+    // Whatever the user of this canvas does to its state (a mask preset clips it) is undone in give():
+    // a clip left on a pooled canvas cut later layers to a strip on some frames.
+    ctx.save()
     return { canvas, ctx }
   }
   give(canvas: AnyCanvas) {
+    ;(canvas.getContext('2d') as Ctx2D).restore()
     const key = `${canvas.width}x${canvas.height}`
     const list = this.free.get(key) ?? []
     list.push(canvas)

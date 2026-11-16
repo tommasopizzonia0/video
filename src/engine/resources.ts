@@ -172,7 +172,9 @@ export class BrowserResources implements Resources {
     const track = await input.getPrimaryVideoTrack()
     if (!track) throw new Error('no video track')
     if (!(await track.canDecode())) throw new Error(`this browser cannot decode ${track.codec ?? 'this codec'}`)
-    const sink = new CanvasSink(track, { poolSize: 6, fit: 'fill' })
+    // Transparent videos (VP9 WebM with alpha, e.g. a person cut out of a clip) keep their transparency.
+    const alpha = (await track.canBeTransparent?.()) ?? false
+    const sink = new CanvasSink(track, { poolSize: 6, fit: 'fill', alpha })
     return { input, sink, width: track.displayWidth, height: track.displayHeight, readers: [] }
   }
 
