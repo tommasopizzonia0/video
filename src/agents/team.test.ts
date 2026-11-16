@@ -137,6 +137,7 @@ describe('fromClaude', () => {
         { plan: 2, from: 'video', to: 'regista', text: 'Accorcio io la scena.', ops: [{ op: 'set', path: ['scenes', 1, 'duration'], value: 2 }] },
         { plan: 3, from: 'audio', to: 'regista', text: 'Tolgo la musica.', ops: [{ op: 'set', path: ['audio', 7, 'volume'], value: 0 }] },
         { from: 'media', to: 'regista', text: 'Le clip sono a 480p.' },
+        { plan: 4, from: 'audio', to: 'regista', text: 'Target sul master.', ops: [{ op: 'set', path: ['mix', 'master'], value: { limiter: true, lufs: -14 } }] },
       ],
       base(),
     )
@@ -147,6 +148,6 @@ describe('fromClaude', () => {
     // Video touching a scene length is vetoed by the director; the broken path becomes a note.
     expect(r.channel.some((m) => m.from === 'regista' && m.text.includes('Timeline'))).toBe(true)
     expect(r.notes.some((m) => m.text.includes('480p'))).toBe(true)
-    expect(r.notes.some((m) => m.from === 'regista' && m.text.includes('scartata'))).toBe(true)
+    expect(r.notes.filter((m) => m.from === 'regista' && m.text.includes('scartata'))).toHaveLength(2)
   })
 })

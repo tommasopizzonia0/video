@@ -24,12 +24,27 @@ Tomm opens the Regia panel and presses **Analizza** or **Fai ragionare Claude**.
 If `context.json` is missing or older than the last change to `live/current.json`, ask Tomm to press
 **Analizza** in the Regia panel first.
 
-## 2. One agent per arrow
+## 2. The director's brief
+
+Read `ruoli/regista.md` (your role) and write the brief it describes (genre, platform, audience, the one
+thing to remember, the action, tone). Every arrow gets it: the same video is cut, mixed and graded
+differently if it is an ad, a tutorial or a documentary.
+
+## 3. One agent per arrow
 
 Start four agents in parallel (Agent tool, one per arrow), unless Tomm asks for a quick round, in which
-case reason as each arrow yourself, one at a time, without mixing their points of view. Give each agent:
-the composition, `context.json`, the frames it needs, its section, the ownership rules below and the
-output format. Ask it to look with taste, not only for errors: rhythm, the hook in the first 2 seconds,
+case reason as each arrow yourself, one at a time, without mixing their points of view. Each agent is a
+senior professional: tell it to read its role file first (absolute path) and to work by it:
+
+| Arrow | Role file | Who it is |
+|---|---|---|
+| `audio` | `ruoli/audio.md` | re-recording mixer and sound designer (listens with earshot when available) |
+| `timeline` | `ruoli/timeline.md` | picture editor |
+| `video` | `ruoli/video.md` | motion designer, art director and colorist (looks at the frames) |
+| `media` | `ruoli/media.md` | producer and asset manager |
+
+Give each agent: the brief, the composition, `context.json`, the frames it needs, its role file, the
+ownership rules below and the output format. Ask it to look with taste, not only for errors: rhythm, the hook in the first 2 seconds,
 whether a frame says what the voice says, whether the music fits the cut, whether the call to action
 lands. Each one returns at most 4 messages.
 
@@ -43,7 +58,7 @@ lands. Each one returns at most 4 messages.
 The director enforces this (`ownerOf` in `src/agents/team.ts`): an arrow that changes another's section is
 vetoed. When the fix belongs to someone else, the arrow **asks** that arrow (a message `to` it).
 
-## 3. Let them talk
+## 4. Let them talk
 
 Deliver every request to the arrow it is addressed to (a second round of the same agents, or reason as
 that arrow yourself with its section and the request) and let it answer: accept with a change, refuse
@@ -51,7 +66,7 @@ with a reason, or pass it on (Timeline lengthens a scene → tells Audio the vid
 after 4 hops. Before each answer, apply the changes already agreed in the same chain, so the next arrow
 sees the composition as it would be.
 
-## 4. Write the round
+## 5. Write the round
 
 Write it into `live/current.json` next to `json` (keep `json` unchanged: proposals are not applied yet):
 
@@ -71,6 +86,8 @@ Write it into `live/current.json` next to `json` (keep `json` unchanged: proposa
 - `plan` groups one chain into one proposal; messages without `plan` are notes for Tomm.
 - `ops`: `set` (path → value), `push` (append to a list), `remove` (a key or a list item), on paths of the
   current composition. Only on messages from the arrow that owns the path.
+  Only fields documented in `docs/MOTION.md`: a proposal that adds an unknown key or an invalid value is
+  dropped by the studio, so tell every agent to check the doc before inventing a field.
 - `target`: where that arrow points while it speaks (`{x,y}` on the frame in comp px, `{clip}` with a
   scene id or layer id/label, `{media}` with a file name, `{channel}` like `a0`, `bus:music`, `master`).
 - Write in Italian, short, as colleagues talking; address the other arrow by name ("Timeline, …").
@@ -78,7 +95,7 @@ Write it into `live/current.json` next to `json` (keep `json` unchanged: proposa
 
 The studio checks every proposal with the same rules as the built-in team (ownership, it must apply,
 duplicates dropped, colliding proposals wait), plays the conversation on the arrows and shows it in the
-Regia panel under **Ragiona Claude**. Tell Tomm in one line how many proposals and notes there are.
+Regia panel under **Ragiona Claude**. Then give Tomm the director's note (see `ruoli/regista.md`).
 
 ## On claude.ai (Artifact)
 

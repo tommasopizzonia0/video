@@ -10,6 +10,7 @@
 
 import type { Platform } from '../engine/check'
 import type { Composition } from '../engine/types'
+import { validate } from '../engine/validate'
 import type { ArrowRole, ClaudeTarget } from '../studio/live'
 
 export type Role = ArrowRole
@@ -360,7 +361,11 @@ export function fromClaude(wire: WireMessage[], comp: Composition): TeamResult {
       continue
     }
     try {
-      applyOps(comp, ops)
+      const after = applyOps(comp, ops)
+      // Only fields the engine knows: a new error or unknown key means the arrow made something up.
+      const before = new Set(validate(comp).map((i) => `${i.path} ${i.message}`))
+      const added = validate(after).find((i) => !before.has(`${i.path} ${i.message}`))
+      if (added) throw new Error(`${added.path || 'radice'}: ${added.message}`)
     } catch (e) {
       const err: Message = { id: nextId++, from: 'regista', to: 'regista', text: `Proposta scartata, non si applica alla composizione attuale: ${e instanceof Error ? e.message : String(e)}` }
       channel.push(err)
