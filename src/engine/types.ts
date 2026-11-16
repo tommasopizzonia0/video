@@ -318,6 +318,8 @@ export interface VideoLayer extends LayerBase {
   playbackRate?: number
   volume?: number
   muted?: boolean
+  /** Its channel strip in the audio console (EQ, dynamics, pan, fader, sends). */
+  mixer?: ChannelSettings
 }
 
 export interface GroupLayer extends LayerBase {
@@ -525,6 +527,65 @@ export interface AudioClip {
   volume?: Anim<number>
   fadeIn?: number
   fadeOut?: number
+  /** Its channel strip in the audio console (EQ, dynamics, pan, fader, sends). */
+  mixer?: ChannelSettings
+}
+
+/** The console's group buses: every clip goes through the bus of its role. */
+export type MixBus = 'music' | 'voice' | 'sfx' | 'video'
+
+/** A channel strip of the audio console, in signal order: EQ, dynamics, pan, fader, sends. */
+export interface ChannelSettings {
+  /** Fader in dB (default 0; -60 or less = silent). */
+  gain?: number
+  /** -1 (left) .. 1 (right). */
+  pan?: number
+  mute?: boolean
+  /** When any strip of the same row is soloed, only the soloed ones play. */
+  solo?: boolean
+  eq?: EqSettings
+  /** Compressor: on when set (and not bypassed). */
+  dynamics?: DynamicsSettings
+  /** Post-fader send to the shared reverb, 0..1. */
+  reverb?: number
+  /** Post-fader send to the shared echo (delay), 0..1. */
+  delay?: number
+  /** Master only: brick-wall limiter at -1 dBFS. */
+  limiter?: boolean
+}
+
+export interface EqSettings {
+  /** Shelf gains in dB (-15..15): low at 100 Hz, high at 8 kHz; mid is a bell at `midFreq` (default 1000 Hz). */
+  low?: number
+  mid?: number
+  midFreq?: number
+  high?: number
+  /** Hz; 0 or absent = off. Removes rumble (low cut) or hiss (high cut). */
+  lowCut?: number
+  highCut?: number
+  bypass?: boolean
+}
+
+export interface DynamicsSettings {
+  /** dBFS (default -24). */
+  threshold?: number
+  /** Default 4 (4:1). */
+  ratio?: number
+  /** Seconds (defaults 0.01 and 0.25). */
+  attack?: number
+  release?: number
+  /** Gain after compression in dB (default 0). */
+  makeup?: number
+  bypass?: boolean
+}
+
+/** The console's shared effects. */
+export interface MixFx {
+  /** Reverb tail in seconds (default 2.2). */
+  reverb?: number
+  /** Echo time in seconds (default 0.32) and how much of it repeats, 0..0.9 (default 0.35). */
+  delay?: number
+  feedback?: number
 }
 
 export interface DuckSettings {
@@ -542,6 +603,10 @@ export interface MixSettings {
   loudness?: number | false
   /** Music ducking under "voice" clips; on by default when there is a voice. false = off. */
   duck?: DuckSettings | false
+  /** Audio console: the group bus strips (one per role) and the master strip. */
+  buses?: Partial<Record<MixBus, ChannelSettings>>
+  master?: ChannelSettings
+  fx?: MixFx
 }
 
 export interface Effects {

@@ -2,7 +2,7 @@
 // track with thumbnails, overlay tracks for text, shapes and media, and the audio below.
 // Clicking or dragging seeks; clicking a clip jumps to it and selects it.
 
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { Renderer, videoRequests } from '../engine/render'
 import type { BrowserResources } from '../engine/resources'
 import { compDuration, layerWindow, sceneStarts, transitionDuration } from '../engine/timeline'
@@ -184,6 +184,7 @@ export function StudioTimeline({
   onDropMedia,
   selected = null,
   onSelect,
+  leading,
 }: {
   comp: Composition | null
   res: BrowserResources | null
@@ -198,6 +199,8 @@ export function StudioTimeline({
   /** Key of the selected clip: scene-<i>, s<scene>-<layer>, top-<layer> or a<audio>. Canc deletes it. */
   selected?: string | null
   onSelect?: (key: string | null) => void
+  /** Shown at the left end of the toolbar (the audio console's toggle). */
+  leading?: ReactNode
 }) {
   const tracks = useMemo(() => (comp ? buildTracks(comp) : []), [comp])
   const thumbs = useSceneThumbs(comp, res)
@@ -253,6 +256,7 @@ export function StudioTimeline({
   return (
     <section className="tl">
       <div className="tl-toolbar">
+        {leading}
         <div className="tl-tools">
           <button title="Vai all'inizio" onClick={() => onSeek(0)}>⏮</button>
           <button title="Fotogramma precedente (←)" onClick={() => onSeek(Math.max(0, time - frame))}>‹</button>

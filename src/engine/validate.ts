@@ -38,7 +38,7 @@ const layerKeys: Record<string, string[]> = {
     'uppercase', 'stroke', 'accent', 'background', 'animate', 'exit', 'counter',
   ],
   image: ['asset', 'width', 'height', 'fit', 'radius'],
-  video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted'],
+  video: ['asset', 'width', 'height', 'fit', 'radius', 'sourceStart', 'playbackRate', 'volume', 'muted', 'mixer'],
   group: ['layers', 'width', 'height', 'clip', 'mask', 'radius', 'fill', 'stroke', 'isolate'],
   studio: ['backdrop', 'products', 'camera', 'move'],
   captions: [
@@ -262,6 +262,37 @@ export function validate(input: unknown): Issue[] {
     checkEase(v.ease, `${path}.ease`)
   }
 
+  const checkChannel = (v: unknown, path: string) => {
+    if (v === undefined) return
+    if (!isObj(v)) return err(path, 'Must be a channel strip { gain?, pan?, mute?, solo?, eq?, dynamics?, reverb?, delay? }.')
+    keys(v, ['gain', 'pan', 'mute', 'solo', 'eq', 'dynamics', 'reverb', 'delay', 'limiter'], path)
+    const range = (x: unknown, p: string, lo: number, hi: number, what: string) => {
+      if (x !== undefined && (!isNum(x) || x < lo || x > hi)) err(p, `Must be ${what} between ${lo} and ${hi}.`)
+    }
+    range(v.gain, `${path}.gain`, -100, 12, 'a fader level in dB')
+    range(v.pan, `${path}.pan`, -1, 1, 'a pan position')
+    range(v.reverb, `${path}.reverb`, 0, 1, 'a send level')
+    range(v.delay, `${path}.delay`, 0, 1, 'a send level')
+    if (v.eq !== undefined) {
+      if (!isObj(v.eq)) err(`${path}.eq`, 'Must be { low?, mid?, midFreq?, high?, lowCut?, highCut?, bypass? }.')
+      else {
+        keys(v.eq, ['low', 'mid', 'midFreq', 'high', 'lowCut', 'highCut', 'bypass'], `${path}.eq`)
+        for (const k of ['low', 'mid', 'high']) range(v.eq[k], `${path}.eq.${k}`, -24, 24, 'a gain in dB')
+        for (const k of ['midFreq', 'lowCut', 'highCut']) range(v.eq[k], `${path}.eq.${k}`, 0, 22000, 'a frequency in Hz')
+      }
+    }
+    if (v.dynamics !== undefined) {
+      if (!isObj(v.dynamics)) err(`${path}.dynamics`, 'Must be { threshold?, ratio?, attack?, release?, makeup?, bypass? }.')
+      else {
+        keys(v.dynamics, ['threshold', 'ratio', 'attack', 'release', 'makeup', 'bypass'], `${path}.dynamics`)
+        range(v.dynamics.threshold, `${path}.dynamics.threshold`, -100, 0, 'a level in dBFS')
+        range(v.dynamics.ratio, `${path}.dynamics.ratio`, 1, 20, 'a ratio')
+        range(v.dynamics.attack, `${path}.dynamics.attack`, 0, 1, 'seconds')
+        range(v.dynamics.release, `${path}.dynamics.release`, 0, 1, 'seconds')
+        range(v.dynamics.makeup, `${path}.dynamics.makeup`, -24, 24, 'a gain in dB')
+      }
+    }
+  }
   const checkLayers = (layers: unknown, path: string) => {
     if (!Array.isArray(layers)) return err(path, 'Must be a list of layers.')
     layers.forEach((layer, i) => checkLayer(layer, `${path}[${i}]`))
@@ -273,6 +304,7 @@ export function validate(input: unknown): Issue[] {
     if (!(type in layerKeys)) return err(`${path}.type`, `Unknown layer type "${type}".${suggest(String(type), Object.keys(layerKeys))} Options: ${Object.keys(layerKeys).join(', ')}.`)
     keys(l, [...common, ...layerKeys[type]], path)
     for (const k of Object.keys(l)) if (animatable.has(k)) checkAnim(l[k], `${path}.${k}`, 'number')
+    if (type === 'video') checkChannel(l.mixer, `${path}.mixer`)
     for (const k of ['start', 'duration'] as const) if (l[k] !== undefined && (!isNum(l[k]) || (l[k] as number) < 0)) err(`${path}.${k}`, 'Must be a number of seconds (>= 0).')
     if (l.anchor !== undefined && !(Array.isArray(l.anchor) && l.anchor.length === 2 && l.anchor.every(isNum))) err(`${path}.anchor`, 'Must be [x, y] relative to the layer box, e.g. [0.5, 0.5].')
     if (l.blend !== undefined && !blendModes.includes(l.blend as string)) err(`${path}.blend`, `Unknown blend mode.${suggest(String(l.blend), blendModes)}`)
@@ -431,7 +463,8 @@ export function validate(input: unknown): Issue[] {
       comp.audio.forEach((a, i) => {
         const p = `audio[${i}]`
         if (!isObj(a)) return err(p, 'Must be { "asset": "...", ... }.')
-        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'beat', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'comment'], p)
+        keys(a, ['asset', 'sfx', 'role', 'scene', 'start', 'beat', 'sourceStart', 'duration', 'volume', 'fadeIn', 'fadeOut', 'mixer', 'comment'], p)
+        checkChannel(a.mixer, `${p}.mixer`)
         if (a.beat !== undefined) {
           if (!Number.isInteger(a.beat) || (a.beat as number) < 0) err(`${p}.beat`, 'Must be a beat number (0 = the first).')
           if (!comp.beats) err(`${p}.beat`, 'Needs "beats": { "asset": "..." } on the composition (from npm run beats).')
@@ -458,7 +491,24 @@ export function validate(input: unknown): Issue[] {
   if (comp.mix !== undefined) {
     if (!isObj(comp.mix)) err('mix', 'Must be { "loudness"?: LUFS | false, "duck"?: {...} | false }.')
     else {
-      keys(comp.mix, ['loudness', 'duck'], 'mix')
+      keys(comp.mix, ['loudness', 'duck', 'buses', 'master', 'fx'], 'mix')
+      const buses = comp.mix.buses
+      if (buses !== undefined) {
+        if (!isObj(buses)) err('mix.buses', 'Must be { music?, voice?, sfx?, video? } channel strips.')
+        else {
+          keys(buses, ['music', 'voice', 'sfx', 'video'], 'mix.buses')
+          for (const [k, v] of Object.entries(buses)) checkChannel(v, `mix.buses.${k}`)
+        }
+      }
+      checkChannel(comp.mix.master, 'mix.master')
+      const fx = comp.mix.fx
+      if (fx !== undefined) {
+        if (!isObj(fx)) err('mix.fx', 'Must be { reverb?, delay?, feedback? }.')
+        else {
+          keys(fx, ['reverb', 'delay', 'feedback'], 'mix.fx')
+          for (const [k, v] of Object.entries(fx)) if (!isNum(v)) err(`mix.fx.${k}`, 'Must be a number.')
+        }
+      }
       const l = comp.mix.loudness
       if (l !== undefined && l !== false && (!isNum(l) || l > -5 || l < -40)) err('mix.loudness', 'Must be a target in LUFS between -40 and -5 (social: -14), or false.')
       const d = comp.mix.duck

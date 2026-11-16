@@ -5,7 +5,8 @@
 import { valueAt } from './animate'
 import { SFX_LENGTH, synthSfx } from './sfx'
 import { compDuration, placedLayers, sceneStarts } from './timeline'
-import type { Anim, Composition, DuckSettings, SfxName } from './types'
+import { MixGraph, busOf, mixerSettings, type MixerSettings } from './mixer'
+import type { Anim, Composition, DuckSettings, MixBus, SfxName } from './types'
 
 export interface MixClip {
   /** Buffer key: the asset id, or "sfx:<name>:<length>" for a synthesized effect. */
@@ -13,6 +14,9 @@ export interface MixClip {
   asset?: string
   sfx?: { name: SfxName; length: number }
   role: 'music' | 'voice' | 'sfx' | 'video'
+  /** Its strip in the audio console: "a<i>" for audio entry i, "v<n>" for video layer n. */
+  channel: string
+  bus: MixBus
   /** Comp time where the clip starts. */
   start: number
   /** Seconds into the source. */
@@ -48,7 +52,9 @@ function sceneOffset(comp: Composition, ref: string | number): number {
 export function audioMix(comp: Composition): MixClip[] {
   const total = compDuration(comp)
   const out: MixClip[] = []
-  for (const a of comp.audio ?? []) {
+  ;(comp.audio ?? []).forEach((a, index) => {
+    const channel = `a${index}`
+    const bus = busOf(a)
     const at = (a.scene !== undefined ? sceneOffset(comp, a.scene) : 0) + (a.start ?? 0)
     if (a.sfx) {
       const length = STRETCHY.has(a.sfx) ? (a.duration ?? SFX_LENGTH[a.sfx]) : SFX_LENGTH[a.sfx]
@@ -60,6 +66,8 @@ export function audioMix(comp: Composition): MixClip[] {
         key: sfxKey(a.sfx, length),
         sfx: { name: a.sfx, length },
         role: a.role ?? 'sfx',
+        channel,
+        bus,
         start: Math.max(0, start),
         sourceStart: skip,
         duration: Math.max(0, Math.min(length - skip, total - Math.max(0, start))),
@@ -69,13 +77,15 @@ export function audioMix(comp: Composition): MixClip[] {
         fadeOut: a.fadeOut ?? 0,
         playbackRate: 1,
       })
-      continue
+      return
     }
-    if (!a.asset) continue
+    if (!a.asset) return
     out.push({
       key: a.asset,
       asset: a.asset,
       role: a.role ?? 'music',
+      channel,
+      bus,
       start: at,
       sourceStart: a.sourceStart ?? 0,
       duration: Math.max(0, Math.min(a.duration ?? Infinity, total - at)),
@@ -85,13 +95,18 @@ export function audioMix(comp: Composition): MixClip[] {
       fadeOut: a.fadeOut ?? 0,
       playbackRate: 1,
     })
-  }
+  })
+  let video = 0
   for (const { layer, start, duration } of placedLayers(comp)) {
-    if (layer.type !== 'video' || layer.muted || (layer.volume ?? 1) <= 0) continue
+    if (layer.type !== 'video') continue
+    const channel = `v${video++}`
+    if (layer.muted || (layer.volume ?? 1) <= 0) continue
     out.push({
       key: layer.asset,
       asset: layer.asset,
       role: 'video',
+      channel,
+      bus: 'video',
       start,
       sourceStart: layer.sourceStart ?? 0,
       duration: Math.max(0, Math.min(duration, total - start)),
@@ -197,17 +212,22 @@ export function clipGain(clip: MixClip, t: number, duck: Float32Array | null): n
   return Math.max(0, v)
 }
 
+/** The audio console for this mix, with the composition's settings (or `settings`). */
+export function mixGraph(ctx: BaseAudioContext, comp: Composition, mix: MixClip[], settings: MixerSettings = mixerSettings(comp), meters = false): MixGraph {
+  return new MixGraph(ctx, mix.map((c) => ({ id: c.channel, bus: c.bus })), settings, { meters })
+}
+
 /**
  * Schedules the mix on a Web Audio context (a live one for preview, an OfflineAudioContext for export),
- * starting from comp time `from`. Returns the scheduled sources so a preview can stop them.
- * `buffers` holds the decoded assets; synthesized effects are added to it here.
+ * starting from comp time `from`, through the audio console `graph`. Returns the scheduled sources so
+ * a preview can stop them. `buffers` holds the decoded assets; synthesized effects are added to it here.
  */
 export function scheduleMix(
   ctx: BaseAudioContext,
   mix: MixClip[],
   buffers: Map<string, AudioBuffer>,
   from = 0,
-  destination: AudioNode = ctx.destination,
+  graph?: MixGraph,
 ): AudioScheduledSourceNode[] {
   addSfxBuffers(ctx, mix, buffers)
   const duck = duckCurve(mix, buffers)
@@ -221,7 +241,7 @@ export function scheduleMix(
     src.buffer = buffer
     src.playbackRate.value = clip.playbackRate
     const gain = ctx.createGain()
-    src.connect(gain).connect(destination)
+    src.connect(gain).connect(graph ? graph.input(clip.channel) : ctx.destination)
 
     const skip = Math.max(0, from - clip.start)
     const when = now + Math.max(0, clip.start - from)

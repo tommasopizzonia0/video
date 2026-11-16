@@ -1,7 +1,9 @@
 // Motion studio: write or open a composition JSON, preview it frame-accurately and export it to MP4.
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { audioMix, scheduleMix } from '../engine/audio'
+import { audioMix, mixGraph, scheduleMix } from '../engine/audio'
+import { mixerSettings, withoutMixer, writeMixer, type MixGraph, type MixerSettings } from '../engine/mixer'
+import { AudioConsole } from './AudioConsole'
 import { platformFor } from '../engine/check'
 import { exportVideo } from '../engine/export'
 import { Renderer, videoRequests } from '../engine/render'
@@ -54,6 +56,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     video: { target: null, at: 0 },
     timeline: { target: null, at: 0 },
     media: { target: null, at: 0 },
+    audio: { target: null, at: 0 },
   })
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -80,7 +83,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const jsonInput = useRef<HTMLInputElement>(null)
   const drawing = useRef(false)
-  const playback = useRef<{ raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[] } | null>(null)
+  const playback = useRef<{ raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph } | null>(null)
   const timeRef = useRef(0)
   useEffect(() => {
     timeRef.current = time
@@ -136,7 +139,38 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     return () => ro.disconnect()
   }, [])
 
-  // Load fonts and media whenever the composition changes.
+  // The audio console's settings: from the JSON, or the control being dragged right now.
+  const mixerFromComp = useMemo<MixerSettings>(() => (comp ? mixerSettings(comp) : { channels: {}, buses: {}, master: {}, fx: {} }), [comp])
+  const [mixerDraft, setMixerDraft] = useState<MixerSettings | null>(null)
+  useEffect(() => setMixerDraft(null), [mixerFromComp])
+  const mixer = mixerDraft ?? mixerFromComp
+  const mixerRef = useRef(mixer)
+  useEffect(() => {
+    mixerRef.current = mixer
+    playback.current?.graph?.set(mixer)
+  }, [mixer])
+  const [showMixer, setShowMixer] = useState(() => {
+    try {
+      return localStorage.getItem('motion-studio-mixer') === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('motion-studio-mixer', showMixer ? '1' : '0')
+    } catch {
+      // Not critical.
+    }
+  }, [showMixer])
+  const [mixerStrip, setMixerStrip] = useState<string | null>(null)
+
+  // Load fonts and media whenever the composition changes; the console's settings alone need no reload.
+  const loadKey = useMemo(() => (comp ? withoutMixer(comp) : null), [comp])
+  const compRef = useRef(comp)
+  useEffect(() => {
+    compRef.current = comp
+  }, [comp])
   const missing = useMemo(
     () =>
       Object.values(comp?.assets ?? {})
@@ -148,9 +182,12 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     [comp, resolve],
   )
   useEffect(() => {
-    if (!comp) return
+    const comp = compRef.current
+    if (!comp || !loadKey) return
     let cancelled = false
-    BrowserResources.load(comp, resolve, setStatus)
+    BrowserResources.load(comp, resolve, (s) => {
+      if (!cancelled) setStatus(s)
+    })
       .then((res) => {
         if (cancelled) {
           void res.dispose()
@@ -174,7 +211,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     return () => {
       cancelled = true
     }
-  }, [comp, resolve])
+  }, [loadKey, resolve])
 
   const duration = session?.renderer.duration ?? 0
 
@@ -369,6 +406,31 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     commit(JSON.stringify(comp, null, 2), `Tomm ha cancellato ${removed} (Ctrl+Z per annullare)`)
   }
 
+  /** Writes the console's settings into the JSON (no reload: playback goes on). */
+  const commitMixer = (m: MixerSettings, note: string) => {
+    let comp: Composition
+    try {
+      comp = JSON.parse(textRef.current) as Composition
+    } catch {
+      setFailure({ comp: null, message: 'Il JSON ha un errore: correggilo prima di usare la console audio.' })
+      return
+    }
+    setMixerDraft(m)
+    commit(JSON.stringify(writeMixer(comp, m), null, 2), note)
+  }
+
+  /** Other audio changes from the console (role, fades, loudness, ducking). */
+  const editComp = (edit: (c: Composition) => void, note: string) => {
+    let comp: Composition
+    try {
+      comp = JSON.parse(textRef.current) as Composition
+    } catch {
+      return
+    }
+    edit(comp)
+    commit(JSON.stringify(comp, null, 2), note)
+  }
+
   const undo = () => {
     const prev = history.current.pop()
     if (prev !== undefined) commit(prev, 'Tomm ha annullato la cancellazione')
@@ -384,7 +446,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const play = useCallback(async () => {
     if (!session || playback.current) return
     const from = timeRef.current >= duration - 0.05 ? 0 : timeRef.current
-    const state: { raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[] } = { raf: 0, audio: null, sources: [] }
+    const state: { raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph } = { raf: 0, audio: null, sources: [] }
     playback.current = state
     setPlaying(true)
     if (audioMix(session.comp).length) {
@@ -393,7 +455,8 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       const mix = audioMix(session.comp)
       const buffers = await session.res.audioBuffers(audio, undefined, mix)
       if (playback.current !== state) return
-      state.sources = scheduleMix(audio, mix, buffers, from)
+      state.graph = mixGraph(audio, session.comp, mix, mixerRef.current, true)
+      state.sources = scheduleMix(audio, mix, buffers, from, state.graph)
     }
     const started = performance.now()
     const tick = () => {
@@ -502,7 +565,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     stop()
     setExporting(0)
     try {
-      const { blob, extension } = await exportVideo(session.comp, session.res, { onProgress: setExporting })
+      const { blob, extension } = await exportVideo(session.comp, session.res, { onProgress: setExporting, mixer: mixerRef.current })
       await offerFile(`motion.${extension}`, blob)
     } catch (e) {
       setFailure({ comp: session.comp, message: `Export non riuscito: ${e instanceof Error ? e.message : String(e)}` })
@@ -688,7 +751,35 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         )}
       </main>
 
+      <div className={`studio-bottom${showMixer ? ' with-mixer' : ''}`}>
+      {showMixer && (
+        <AudioConsole
+          comp={comp}
+          mixer={mixer}
+          onDraft={setMixerDraft}
+          onCommit={commitMixer}
+          onEdit={editComp}
+          getLevels={() => {
+            const g = playback.current?.graph
+            return g ? { levels: g.levels(), reduction: g.reduction() } : null
+          }}
+          selected={mixerStrip}
+          onSelect={(id) => {
+            setMixerStrip(id)
+            if (/^a\d+$/.test(id)) setSelectedClip(id)
+          }}
+        />
+      )}
       <StudioTimeline
+        leading={
+          <button
+            className={`ac-toggle${showMixer ? ' open' : ''}`}
+            title={showMixer ? 'Chiudi la console audio' : 'Apri la console audio: volumi, EQ, compressore, pan, effetti'}
+            onClick={() => setShowMixer((v) => !v)}
+          >
+            <span className="ac-toggle-arrow">{showMixer ? '◀' : '▶'}</span> Audio
+          </button>
+        }
         comp={session?.comp ?? null}
         res={session?.res ?? null}
         time={time}
@@ -702,14 +793,18 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         onTogglePlay={() => (playing ? stop() : void play())}
         onDropMedia={showLibrary ? (item, t) => void addMedia(item, t) : undefined}
         selected={selectedClip}
-        onSelect={setSelectedClip}
+        onSelect={(key) => {
+          setSelectedClip(key)
+          if (key && /^a\d+$/.test(key)) setMixerStrip(key)
+        }}
       />
+      </div>
 
       {showLibrary && <MediaPanel onAdd={(item) => void addMedia(item)} />}
 
       {live &&
         session &&
-        ARROW_ROLES.filter((role) => role !== 'media' || showLibrary).map((role) => (
+        ARROW_ROLES.filter((role) => (role !== 'media' || showLibrary) && (role !== 'audio' || showMixer)).map((role) => (
           <ClaudeCursor
             key={role}
             role={role}
@@ -754,12 +849,13 @@ const ARROW_STYLE: Record<ArrowRole, { name: string; stops: [string, string, str
   video: { name: 'Video', stops: ['#ffd166', '#ff4d6d', '#7c5cff'] },
   timeline: { name: 'Timeline', stops: ['#7df9ff', '#2fb8ff', '#3b5bff'] },
   media: { name: 'Caricamenti', stops: ['#d9ff7a', '#5fd36b', '#13a882'] },
+  audio: { name: 'Audio', stops: ['#ffb36b', '#ff5a76', '#c13cff'] },
 }
 
 /** Where a target is on screen right now, or null when it is not shown. */
 function locate(target: ClaudeTarget, comp: Composition, canvas: HTMLCanvasElement | null): { left: number; top: number } | null {
-  if ('clip' in target || 'media' in target) {
-    const key = 'clip' in target ? target.clip : `media:${target.media}`
+  if ('clip' in target || 'media' in target || 'channel' in target) {
+    const key = 'clip' in target ? target.clip : 'media' in target ? `media:${target.media}` : `channel:${target.channel}`
     const el = document.querySelector(`[data-claude="${CSS.escape(key)}"]`)
     if (!el) return null
     const r = el.getBoundingClientRect()
@@ -774,11 +870,12 @@ function locate(target: ClaudeTarget, comp: Composition, canvas: HTMLCanvasEleme
 
 /** Where an arrow waits when it has nothing to do: at the edge of its own area, always visible. */
 function parking(role: ArrowRole, canvas: HTMLCanvasElement | null): { left: number; top: number } | null {
-  const el = role === 'video' ? canvas : document.querySelector(role === 'timeline' ? '.tl-toolbar' : '.mp-head')
+  const el = role === 'video' ? canvas : document.querySelector(role === 'timeline' ? '.tl-toolbar' : role === 'audio' ? '.ac-head' : '.mp-head')
   if (!el) return null
   const r = el.getBoundingClientRect()
   if (role === 'video') return { left: r.right - 30, top: r.top + 24 }
-  if (role === 'timeline') return { left: r.left + 230, top: r.top + 10 }
+  if (role === 'timeline') return { left: r.left + 330, top: r.top + 10 }
+  if (role === 'audio') return { left: r.left + Math.min(r.width - 120, 420), top: r.top + 10 }
   return { left: r.left + 130, top: r.top + 12 }
 }
 
@@ -794,8 +891,8 @@ function ClaudeCursor({ role, comp, canvas, at, note, active }: { role: ArrowRol
   useEffect(() => {
     let raf = 0
     const tick = () => {
-      if (at && at !== scrolledFor.current && ('clip' in at || 'media' in at)) {
-        const key = 'clip' in at ? at.clip : `media:${at.media}`
+      if (at && at !== scrolledFor.current && ('clip' in at || 'media' in at || 'channel' in at)) {
+        const key = 'clip' in at ? at.clip : 'media' in at ? `media:${at.media}` : `channel:${at.channel}`
         const el = document.querySelector(`[data-claude="${CSS.escape(key)}"]`)
         if (el) {
           el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' })
