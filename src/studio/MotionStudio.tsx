@@ -19,6 +19,7 @@ import { applyBeatGrid } from '../engine/beatgrid'
 import { connectLive, saveLiveFile, sendToClaude, uploadLiveFiles, watchLiveFiles, type ClaudeTarget, type LiveUpdate, type ArrowRole, ARROW_ROLES, arrowFor } from './live'
 import { StudioTimeline } from './StudioTimeline'
 import { Clock } from './clock'
+import { PlaybackVideo, PlayState, previewResources } from './playbackVideo'
 
 const examples = import.meta.glob<string>('../../examples/*.json', { eager: true, query: '?raw', import: 'default' })
 const exampleAssets = import.meta.glob<string>('../../examples/assets/*', { eager: true, query: '?url', import: 'default' })
@@ -72,7 +73,9 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   // Errors are tied to the composition they came from, so editing clears them.
   const [failure, setFailure] = useState<{ comp: Composition | null; message: string } | null>(null)
   const [exporting, setExporting] = useState<number | null>(null)
-  const [session, setSession] = useState<{ comp: Composition; res: BrowserResources } | null>(null)
+  const [session, setSession] = useState<{ comp: Composition; res: BrowserResources; video: PlaybackVideo } | null>(null)
+  // While playing, video layers are drawn from <video> elements (see playbackVideo.ts).
+  const [playState] = useState(() => new PlayState())
 
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // The canvas element as state too, so the preview renderer can be built during render.
@@ -84,7 +87,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
   const fileInput = useRef<HTMLInputElement>(null)
   const jsonInput = useRef<HTMLInputElement>(null)
   const drawing = useRef(false)
-  const playback = useRef<{ raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph } | null>(null)
+  const playback = useRef<{ raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph; video?: PlaybackVideo } | null>(null)
   const timeRef = useRef(0)
   useEffect(() => {
     timeRef.current = time
@@ -218,7 +221,8 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         const timed = expandStudioWith(comp.beats ? applyBeatGrid(comp, res.beats(comp.beats.asset) ?? []) : comp, res)
         setSession((prev) => {
           void prev?.res.dispose()
-          return { comp: timed, res }
+          prev?.video.dispose()
+          return { comp: timed, res, video: new PlaybackVideo(timed, resolve) }
         })
         setStatus(null)
       })
@@ -248,8 +252,8 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       css = { width: W * fit, height: H * fit }
       scale = Math.min(maxScale, Math.max(0.05, fit * stageSize.dpr))
     }
-    return { renderer: new Renderer(canvasEl, session.comp, session.res, { scale }), css }
-  }, [session, stageSize, canvasEl])
+    return { renderer: new Renderer(canvasEl, session.comp, previewResources(session.res, session.video, playState), { scale }), css }
+  }, [session, stageSize, canvasEl, playState])
   const renderer = preview?.renderer ?? null
 
   const duration = renderer?.duration ?? 0
@@ -268,7 +272,10 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         let next: number | null = t
         while (next !== null) {
           pending.current = null
-          await session.res.prepare(videoRequests(session.comp, next))
+          if (playState.playing) {
+            await session.video.prepare(videoRequests(session.comp, next))
+            session.video.cue(videoRequests(session.comp, next + 0.5))
+          } else await session.res.prepare(videoRequests(session.comp, next))
           renderer.draw(next)
           next = pending.current
         }
@@ -276,7 +283,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
         drawing.current = false
       }
     },
-    [session, renderer],
+    [session, renderer, playState],
   )
 
   useEffect(() => {
@@ -287,13 +294,15 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     const p = playback.current
     if (!p) return
     cancelAnimationFrame(p.raf)
+    playState.set(false)
+    p.video?.pause()
     for (const s of p.sources) s.stop()
     void p.audio?.close()
     playback.current = null
     setPlaying(false)
     // The time shown while playing becomes the paused time.
     setTime(clock.get())
-  }, [clock])
+  }, [clock, playState])
 
   // Live: Claude's edits replace the JSON as they arrive, and can jump to the part being changed.
   useEffect(() => {
@@ -510,9 +519,12 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
     if (!session || playback.current) return
     const now = clock.get()
     const from = now >= duration - 0.05 ? 0 : now
-    const state: { raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph } = { raf: 0, audio: null, sources: [] }
+    const state: { raf: number; audio: AudioContext | null; sources: AudioScheduledSourceNode[]; graph?: MixGraph; video?: PlaybackVideo } = { raf: 0, audio: null, sources: [], video: session.video }
     playback.current = state
     setPlaying(true)
+    playState.set(true)
+    session.video.warm()
+    session.video.cue(videoRequests(session.comp, from))
     if (audioMix(session.comp).length) {
       const audio = new AudioContext()
       state.audio = audio
@@ -542,7 +554,7 @@ export function MotionStudio({ live = false }: { live?: boolean }) {
       state.raf = requestAnimationFrame(tick)
     }
     state.raf = requestAnimationFrame(tick)
-  }, [session, duration, draw, stop, clock])
+  }, [session, duration, draw, stop, clock, playState])
 
   // When the composition changes while playing (Claude editing live, a clip dropped on the timeline),
   // playback stops for the reload and picks up again from the same moment on the new version.
